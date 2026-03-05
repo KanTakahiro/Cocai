@@ -1,55 +1,45 @@
 # Application Configuration (AppConfig)
 
-Runtime settings are centralized in `src/config.py` via the `AppConfig` dataclass. This replaces ad‑hoc `os.environ.get()` calls and makes configuration testable and future‑GUI friendly.
+Runtime settings are centralized in `src/config.py` via the `AppConfig` dataclass.  Configuration is split across two files so that API keys never enter version control:
 
-## Goals
+| File | Content | Git |
+|------|---------|-----|
+| `config.toml` | Non-secret settings (endpoints, model names, paths, feature flags) | **committed** |
+| `.env` | Secrets (`LLM_API_KEY`, `EMBED_API_KEY`, `CHAINLIT_AUTH_SECRET`, …) | git-ignored |
 
-- Easier unit testing (`AppConfig.from_env(custom_mapping)`).
-- Single source of truth for future GUI / admin panel.
-- Explicit precedence: LLM provider (OpenAI > Together > Ollama); memory (disable flag > cloud Mem0 > local Mem0 > fallback default memory).
+## Key Fields
 
-## Key Fields (Excerpt)
-
-| Concern | Fields |
+| Section | Fields |
 |---------|--------|
-| LLM provider | `openai_api_key`, `together_api_key`, `ollama_llm_id`, `ollama_base_url` |
-| Embeddings | `ollama_embed_model_id` |
-| Module RAG | `game_module_path`, `should_preread_game_module`, `should_reuse_existing_index` |
-| Memory | `disable_memory`, `mem0_api_key` |
-| Auto updates | `enable_auto_history_update`, `enable_auto_scene_update` |
-| Storage / MinIO | `minio_access_key`, `minio_secret_key` |
-| Vector DB (Qdrant) | `qdrant_host`, `qdrant_port`, `qdrant_collection` |
-| Stable Diffusion | `stable_diffusion_api_url` |
+| `[llm]` | `api_base`, `model` |
+| `[embedding]` | `api_base`, `model`, `dims` |
+| `[vector_store]` | `path` (ChromaDB dir), `rag_collection`, `mem_collection` |
+| `[memory]` | `enabled` |
+| `[tracing]` | `enabled`, `endpoint` |
+| `[game_module]` | `path`, `preread`, `reuse_index` |
+| `[auto_update]` | `history`, `scene` |
+
+API keys read from `.env`: `LLM_API_KEY`, `EMBED_API_KEY` (falls back to `LLM_API_KEY`), `MEM0_API_KEY` (optional), `TAVILY_API_KEY` (optional).
 
 ## Usage in `main.py`
 
 ```python
 from config import AppConfig
 
-cfg = AppConfig.from_env()
+cfg = AppConfig.from_config()          # reads config.toml + .env
 system_prompt = set_up_llama_index(cfg)
 memory = __prepare_memory(key, cfg)
 ```
 
+`from_config()` is called once per chat session inside `@cl.on_chat_start` — not at import time — so every session picks up the latest config without a server restart.
+
 ## Adding a New Config Value
 
-1. Add the dataclass field with a sensible default.
-2. Extend `AppConfig.from_env` to read the env var.
-3. Add or update a test in `tests/test_config.py`.
+1. Add a field to `config.toml` (non-secret) or note it as a `.env` key (secret).
+2. Add the corresponding field to `AppConfig` in `src/config.py` with a sensible default.
+3. Read it in `AppConfig.from_config()`.
+4. Add or update a test in `tests/test_config.py`.
 
-## Future GUI Idea
+## Testing
 
-Expose a REST or Chainlit settings pane:
-
-- `GET /config` -> serialize `asdict(AppConfig.from_env())`.
-- `PATCH /config` -> write updates to a managed `.env.local` file which is loaded before `from_env`.
-
-## Testing Strategy
-
-Unit tests assert:
-
-- Provider precedence.
-- Boolean flag parsing via shared `env_flag`.
-- Defaults when variables absent.
-
-Coverage for `config.py` should remain high (aim ≥90%).
+`AppConfig.from_config(toml_path=..., env={...})` accepts explicit arguments so tests never need files on disk or real env vars.  `AppConfig.from_dict(...)` lets tests construct a config from a plain dict directly.
