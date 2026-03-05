@@ -191,7 +191,9 @@ function openDiceWindow (url) {
 
 function listenEvents () {
   try {
-    const es = new EventSource('/api/events')
+    // Derive base URL dynamically so the path works both at root (dev) and a subpath (e.g. /coc-ai/)
+    const apiBase = window.location.pathname.replace(/\/[^/]*$/, '')
+    const es = new EventSource(apiBase + '/api/events')
     es.onmessage = (ev) => {
       console.log('Received SSE:', ev.data)
       try {
