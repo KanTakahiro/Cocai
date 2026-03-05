@@ -54,10 +54,6 @@ class OpenAICompatibleEmbedding(BaseEmbedding):
             model=self.model_name, input=[text]
         ).data[0].embedding
 
-    def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
-        response = self._sync_client.embeddings.create(model=self.model_name, input=texts)
-        return [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
-
     async def _aget_query_embedding(self, query: str) -> List[float]:
         response = await self._async_client.embeddings.create(
             model=self.model_name, input=[query]
@@ -69,10 +65,6 @@ class OpenAICompatibleEmbedding(BaseEmbedding):
             model=self.model_name, input=[text]
         )
         return response.data[0].embedding
-
-    async def _aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
-        response = await self._async_client.embeddings.create(model=self.model_name, input=texts)
-        return [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
 
 
 class LocalStorageClient(BaseStorageClient):
