@@ -235,7 +235,6 @@ def __prepare_memory(key, app_config: AppConfig) -> Memory | Mem0Memory:
             "provider": "openai",
             "config": {
                 "model": app_config.embed_model,
-                "embedding_dims": app_config.embed_dims,
                 "openai_base_url": app_config.embed_api_base,
                 "api_key": app_config.embed_api_key,
             },
