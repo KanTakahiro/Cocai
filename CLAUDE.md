@@ -14,7 +14,7 @@ uv run pytest tests/test_config.py::test_config_defaults  # Single test
 **Service URLs:** Chat `http://localhost:8000/chat` · Play UI `http://localhost:8000/play`
 
 **First-run setup:**
-1. Copy `config.toml` and fill in your API endpoint/model settings
+1. Edit `config.toml` and fill in your API endpoint/model settings
 2. Create `.env` from `.env.example` and fill in API keys
 3. Run `chainlit create-secret` and add the secret to `.env`
 4. `just serve`
@@ -48,7 +48,7 @@ CoCai is an AI-powered Call of Cthulhu game master. A FastAPI app (`server.py`) 
 | `src/config.py` | `AppConfig` dataclass — reads `config.toml` + env for secrets |
 | `src/state.py` | `GameState` / `Clue` dataclasses for the play UI panes |
 | `src/events.py` | `Broadcaster` for SSE pub-sub to play UI |
-| `src/utils.py` | `LocalStorageClient` (file storage), data layer setup, logging |
+| `src/utils.py` | `OpenAICompatibleEmbedding` (custom embedding class), `LocalStorageClient` (file storage), data layer setup, logging |
 | `src/agentic_tools/` | One file per tool (dice, RAG, character, stats, clues) |
 | `src/async_panes/` | Background pane update manager (history summary) |
 | `public/play.html/js/css` | Three-pane play UI (history · illustration · character stats) |
@@ -58,7 +58,7 @@ CoCai is an AI-powered Call of Cthulhu game master. A FastAPI app (`server.py`) 
 
 Both LLM and embedding use OpenAI-compatible API endpoints configured in `config.toml`:
 - LLM: `OpenAILike(model=..., api_base=..., api_key=...)` — works with OpenAI, Together AI, Groq, vLLM, etc.
-- Embedding: `OpenAIEmbedding(model=..., api_base=..., api_key=...)` — same flexibility.
+- Embedding: `OpenAICompatibleEmbedding(model=..., api_base=..., api_key=...)` from `src/utils.py` — accepts any model name without enum validation; use instead of `OpenAIEmbedding` which only accepts official OpenAI model names.
 
 **Important:** Initialize LLMs inside `@cl.on_chat_start` (not at import time) so Phoenix traces attach correctly to Agent Steps.
 
