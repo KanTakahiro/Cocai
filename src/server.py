@@ -1,3 +1,15 @@
+import warnings
+
+# LlamaIndex uses inspect.getmembers() to introspect Pydantic fn_schema models.
+# That internally accesses the deprecated Pydantic V2 `__fields__` attribute,
+# producing a PydanticDeprecatedSince20 warning we cannot fix in third-party code.
+# Suppress it here, before any LlamaIndex / Pydantic imports happen.
+warnings.filterwarnings(
+    "ignore",
+    message=r"The `__fields__` attribute is deprecated",
+    category=DeprecationWarning,
+)
+
 import asyncio
 import logging
 import multiprocessing as mp
