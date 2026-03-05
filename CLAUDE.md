@@ -102,6 +102,10 @@ uv run phoenix serve   # runs at http://localhost:6006 and OTEL at :4317
 
 Reference examples: stateless → `roll_a_dice`; context + UI → `roll_a_skill`; RAG → `ToolForConsultingTheModule`.
 
+### README files
+
+`README.md` is the English version; `README.zh-TW.md` is the Traditional Chinese version. **Both files must be updated together** — any change to one must be reflected in the other.
+
 ### Adding a new async pane
 
 ```python

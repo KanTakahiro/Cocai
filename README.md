@@ -34,213 +34,186 @@ Thanks to the chain-of-thought (CoT) visualization feature, you can unfold the t
 
 <img width="771" alt="image" src="https://github.com/user-attachments/assets/8ae52b80-b3c0-4978-9649-64039a5c113e">
 
-## Architecture
+## Changes from the Original Repo
 
-Prominent dependencies of _Cocai_ include:
+This fork simplifies the deployment by removing all mandatory external services:
+
+| | Original | This fork |
+|--|---------|-----------|
+| **LLM / Embedding** | Ollama (local) or OpenAI/Together AI | Any OpenAI-compatible API — configured via `config.toml` |
+| **Vector DB** | Qdrant (Docker) | ChromaDB — runs in-process, persists to local disk |
+| **File storage** | MinIO (Docker) | Local filesystem (`.chainlit/files/`) |
+| **Observability** | Arize Phoenix (Docker) — always on | Optional; disabled by default |
+| **Image generation** | Stable Diffusion Web UI (standalone) | Removed |
+| **Python** | 3.12 only (`<3.13` due to numba) | 3.12+ (numba 0.61+ supports 3.13–3.15) |
+| **Dev startup** | `just serve-all` (tmux + Docker + Ollama) | `just serve` (single command, no dependencies) |
+
+**Configuration** is now split cleanly:
+- `config.toml` — non-secret settings (API base URLs, model names, feature flags) — committed to git
+- `.env` — API keys only — git-ignored
+
+## Architecture
 
 ```mermaid
 flowchart TD
-    subgraph Standalone Programs
-        o[Ollama]
-        s[Stable Diffusion Web UI]
-    subgraph managed by Docker Compose
-        q[(Qdrant)]
-        m[(minIO)]
-        a[Arize Phoenix]
-    end
-    end
-    subgraph Python packages
+    subgraph "Python packages (in-process)"
+        chroma[(ChromaDB)]
         mem0[mem0]
         l[Chainlit]
         c[LlamaIndex]
     end
-    s -. "provides drawing capability to" .-> c
-    o -. "provides LLM & Embedding Model to" .-> c
-    q --provides Vector DB to --> c
-    q --provides Vector DB to --> mem0
-    mem0 --provides short-term memory to --> c
-    o --provides LLM & Embedding Model to --> mem0
+    subgraph "External APIs (configured in config.toml)"
+        llm_api[LLM API\nopenai / groq / together / …]
+        embed_api[Embedding API\nopenai / together / …]
+    end
+    subgraph "Optional"
+        phoenix[Arize Phoenix\nobservability]
+    end
 
-    m --provides Object DB to --> l
-    l --provides Web UI to --> c
-    a --provides observability to --> c
+    llm_api -. "LLM calls" .-> c
+    embed_api -. "embedding" .-> c
+    embed_api -. "embedding" .-> mem0
+    llm_api -. "memory LLM" .-> mem0
+    chroma --"vector store"--> c
+    chroma --"vector store"--> mem0
+    mem0 --"short-term memory"--> c
+    l --"Web UI"--> c
+    phoenix -. "traces (optional)" .-> c
 ```
-
-Zooming in on the programs managed by Docker Compose, here are the ports and local folders (git-ignored) that each container will expose and use:
-
-![programs managed by Docker Compose](docs/docker-compose.png)
-
-(Generated via `just plot-docker-compose`)
 
 ## Usage
 
-### Pre-requisites
+### Prerequisites
 
-There are a couple of things you have to do manually before you can start using the chatbot.
+You only need two binary tools:
 
-1. Clone the repository ([how](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository)).
-2. **Install the required binary, standalone programs**. These are not Python packages, so they aren't managed by `pyproject.toml`.
-3. **Self-serve a text embedding model**. This model "translates" your text into numbers, so that the computer can understand you.
-4. **Choose a way to serve a large language model (LLM)**. You can either use OpenAI's API or self-host a local LLM with Ollama.
-5. **Initialize secrets**.
+- [`uv`](https://docs.astral.sh/uv/) — Python package manager (handles virtualenv and dependencies automatically)
+- [`just`](https://github.com/casey/just) — command runner
 
-No need to explicitly install Python packages. `uv`, the package manager of our choice, will implicitly install the required packages when you boot up the chatbot for the first time.
-
-#### Install the required binary programs
-
-These are the binary programs that you need to have ready before running Cocai:
-
-- [`just`](https://github.com/casey/just), a command runner. I use this because I always tend to forget the exact command to run.
-- [`uv`](https://docs.astral.sh/uv/), the Python package manager that Cocai uses. It does not require you to explicitly create a virtual environment.
-- [Docker](https://www.docker.com/). Cocai requires many types of databases, e.g. object storage and vector storage, along with some containerized applications. We need the `docker-compose` command to orchestrate these containers.
-- [Ollama][olm]. Doc ingestion and memories are relying on a local embedding model.
-- (Optional) [Tmuxinator](https://github.com/tmuxinator/tmuxinator) and [`tmux`](https://github.com/tmux/tmux/wiki), if you ever want to run the chatbot the easy way (discussed later).
-
-If you are on macOS, you can install these programs using Homebrew:
+On macOS:
 
 ```shell
-brew install just uv ollama tmuxinator
-brew install --cask docker
+brew install uv just
 ```
 
-Optionally, also install [Stable Diffusion Web UI][sdwu]. This allows the chatbot to generate illustrations.
-
-[olm]: https://ollama.com/
-[sdwu]: https://github.com/lllyasviel/stable-diffusion-webui-forge
-
-#### Self-serve an embedding model
-
-Ensure that you have a local Ollama server running (if not, start one with `ollama serve`). Then, download the [`nomic-embed-text`](https://ollama.com/library/nomic-embed-text) model by running:
+On Debian/Ubuntu:
 
 ```shell
-ollama pull nomic-embed-text
+curl -LsSf https://astral.sh/uv/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin
 ```
 
-#### Bring your own large language model (LLM)
+No Docker, no Ollama, no Stable Diffusion required.
 
-The easiest (and perhaps highest-quality) way would be to provide an API key to OpenAI. Simply add `OPENAI_API_KEY=sk-...` to a `.env` file in the project root.
+### Setup
 
-With the absence of an OpenAI API key, the chatbot will default to using [Ollama][olm], a program that serves LLMs locally.
+**1. Choose an LLM and embedding API**
 
-- Ensure that your local Ollama server has already downloaded the `gpt-oss:20b` model. If you haven't (or aren't sure), run `ollama pull gpt-oss:20b`.
-- If you want to use a different model that does not support function-calling, that's also possible. Revert [this commit][tc], so that you can use the ReAct paradigm to simulate function-calling capabilities with a purely semantic approach.
+You need an API that is OpenAI-compatible. Common options:
 
-[tc]: https://github.com/StarsRail/Cocai/commit/13d777767d1dd96024021c085247525ec52b79ba
+| Provider | LLM example | Embedding example |
+|----------|------------|-------------------|
+| OpenAI | `gpt-4o` | `text-embedding-3-small` |
+| Together AI | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | `togethercomputer/m2-bert-80M-8k-retrieval` |
+| Groq | `llama-3.3-70b-versatile` | *(use separate embedding API)* |
+| Local vLLM / LM Studio | any model | any embedding model |
 
-#### Prepare secrets
+**2. Configure `config.toml`**
 
-Run `chainlit create-secret` to generate a JWT token. Follow the instructions to add the secret to `.env`.
-
-Start serving minIO for the first time (by running `minio server .minio/` if you have a local binary installed, or used Docker Compose command discussed below). Then navigate to `http://127.0.0.1:57393/access-keys` and create a new access key. (You may need to log in first. The default credentials can be found in [their official documentation][mod].) Add the access key and secret key to `.env`:
-
-[mod]: https://min.io/docs/minio/linux/reference/minio-server/settings/root-credentials.html#id1
+Edit the `config.toml` in the project root. The defaults point to OpenAI's API — change the `api_base` and `model` fields as needed:
 
 ```toml
-MINIO_ACCESS_KEY="foo"
-MINIO_SECRET_KEY="bar"
+[llm]
+api_base = "https://api.openai.com/v1"
+model    = "gpt-4o"
+
+[embedding]
+api_base = "https://api.openai.com/v1"
+model    = "text-embedding-3-small"
+dims     = 1536          # must match the model; OpenAI small = 1536
 ```
 
-Optionally, if you want to enable the chatbot to search the internet, you can provide a Tavily API key. Add `TAVILY_API_KEY=...` to `.env`.
+**3. Create `.env` with your secrets**
 
-Optionally, if you prefer to use OpenAI ("GPT") as your LLM, add `OPENAI_API_KEY=...` to `.env`.
+Copy `.env.example` to `.env` and fill in your keys:
 
-Optionally, if you prefer to use a hosted open LLM, you can try [Together.ai](https://www.together.ai/). Add `TOGETHER_AI_API_KEY=...` to `.env`.
+```shell
+cp .env.example .env
+```
 
-### Running the Chatbot
+```shell
+# .env
+LLM_API_KEY=sk-...
+EMBED_API_KEY=sk-...          # often the same as LLM_API_KEY
+CHAINLIT_AUTH_SECRET=...      # generate with: uv run chainlit create-secret
+```
 
-There are 2 ways to start the chatbot, the easy way and the hard way.
+**4. Start the chatbot**
 
-In the easy way, **simply run `just serve-all`**. This will start all the required standalone programs and the chatbot in one go. Notes:
+```shell
+just serve
+```
 
-- **Use of multiplexer.** To avoid cluttering up your screen, we use a [terminal multiplexer][tmx] (`tmux`), which essentially divides your terminal window into panes, each running a separate program.
-  The panes are defined in the file `tmuxinator.yaml`. [Tmuxinator](https://github.com/tmuxinator/tmuxinator) is a separate program that manages `tmux` sessions declaratively.
-- **Don't use the Dockerfile**. For a tech demo, I hacked up a `Dockerfile`, which uses this `just serve-all` command. But the `tmuxinator.yaml` file had been updated since, and I'm pretty sure the Dockerfile is broken now.
+Cocai will be ready at `http://localhost:8000/chat`.
+The multi-pane play UI is at `http://localhost:8000/play`.
 
-[tmx]: https://en.wikipedia.org/wiki/Terminal_multiplexer
-
-<img width="1278" alt="image" src="https://github.com/user-attachments/assets/d7db810d-4de0-432d-87f2-affc14e1daa9">
-
-In the hard way, you want to create a separate terminal for each command:
-
-1. Start serving **Ollama** by running `ollama serve`. It should be listening at `http://localhost:11434/v1`. Details:
-   - This is for locally inferencing embedding & language models.
-   - I did not containerize this because [Docker doesn't support GPUs in Apple Silicon](https://chariotsolutions.com/blog/post/apple-silicon-gpus-docker-and-ollama-pick-two/) (as of Feb 2024), which is what I'm using.
-2. Start Docker containers by running `docker-compose up`. This includes:
-   - ~~**minIO** object database (for persisting data for our web frontend, including user credentials and chat history -- not thought chains, though)~~
-   - **Arize Phoenix** platform (for debugging thought chains)
-   - **Qdrant** vector database (for the chatbot's short-term memory -- this is implemented via `mem0`)
-3. Optionally, start serving a "**Stable Diffusion web UI**" server with API support turned on by running `cd ../stable-diffusion-webui-forge; ./webui.sh --api --nowebui --port 7860`.
-   - This enables your AI Keeper to draw illustrations.
-   - If Stable Diffusion is not running, the AI Keeper will still be able to generate text-based responses. It's just that it won't be able to draw illustrations.
-4. Finally, start serving the **chatbot** by running `just serve`.
-
-Either way, Cocai should be ready at `http://localhost:8000/chat/`. ~~Log in with the dummy credentials `admin` and `admin`.~~
+On first run, `uv` installs all Python dependencies automatically. ChromaDB will create `.data/chroma/` to persist the game module index across restarts.
 
 ### Multi-pane Play UI (experimental)
 
-In addition to the default Chainlit chat UI, Cocai now exposes a three-pane gameplay UI at `http://localhost:8000/play`:
+In addition to the default Chainlit chat UI, Cocai exposes a three-pane gameplay UI at `http://localhost:8000/play`:
 
 - Left sidebar: History (summary text) and a Clues accordion
-- Center: Illustration pane on top; the usual Chainlit chat embedded below
+- Center: The usual Chainlit chat
 - Right sidebar: PC name, stats, and skill buttons (click to roll)
 
-Programmatic updates during the game can be done via new tools the agent can call:
+Auto-updating history excerpt:
 
-- update_history_excerpt(summary)
-- record_a_clue(title, content, found_at?, clue_id?)
-- set_illustration_url(url)
+- After each agent response, Cocai optionally refreshes the History pane with a concise summary of the story so far. The decision is made by the LLM to avoid updating on pure rules/meta clarifications.
+- Disable with `[auto_update] history = false` in `config.toml`.
 
-Auto-updating History excerpt
+### Optional: Tracing with Arize Phoenix
 
-- After each agent response, Cocai will optionally refresh the History pane with a concise summary of the story so far. The decision is made by the LLM to avoid updating on pure rules/meta clarifications.
-- The summary considers the full conversation transcript (recent turns prioritized) and the existing History text to keep continuity.
-- You can disable this behavior by setting `ENABLE_AUTO_HISTORY_UPDATE=0` in your `.env`.
+To enable LLM call tracing (useful for debugging agent reasoning):
+
+```toml
+# config.toml
+[tracing]
+enabled  = true
+endpoint = "http://localhost:4317"
+```
+
+Then start Phoenix locally (no Docker needed):
+
+```shell
+uv run phoenix serve
+```
+
+Phoenix UI will be at `http://localhost:6006`.
 
 ## Troubleshooting
 
-If you see:
-
-```text
-  File ".../llvmlite-0.43.0.tar.gz/ffi/build.py", line 142, in main_posix
-    raise RuntimeError(msg) from None
-RuntimeError: Could not find a `llvm-config` binary. There are a number of reasons this could occur, please see: https://llvmlite.readthedocs.io/en/latest/admin-guide/install.html#using-pip for help.
-error: command '.../bin/python' failed with exit code 1
-```
-
-Then run:
+**`RuntimeError: Could not find a 'llvm-config' binary`** — run:
 
 ```shell
-brew install llvm
+brew install llvm          # macOS
+apt-get install llvm       # Debian/Ubuntu
 ```
 
-If your `uv run phoenix serve` command fails with:
-
-```text
-Traceback (most recent call last):
-  File "Cocai/.venv/bin/phoenix", line 5, in <module>
-    from phoenix.server.main import main
-  File "Cocai/.venv/lib/python3.11/site-packages/phoenix/__init__.py", line 12, in <module>
-    from .session.session import (
-  File ".venv/lib/python3.11/site-packages/phoenix/session/session.py", line 41, in <module>
-    from phoenix.core.model_schema_adapter import create_model_from_inferences
-  File ".venv/lib/python3.11/site-packages/phoenix/core/model_schema_adapter.py", line 11, in <module>
-    from phoenix.core.model_schema import Embedding, Model, RetrievalEmbedding, Schema
-  File ".venv/lib/python3.11/site-packages/phoenix/core/model_schema.py", line 554, in <module>
-    class ModelData(ObjectProxy, ABC):  # type: ignore
-TypeError: metaclass conflict: the metaclass of a derived class must be a (non-strict) subclass of the metaclasses of all its bases
-```
-
-then you can work around the problem for now by [serving Arize Phoenix from a Docker container](https://docs.arize.com/phoenix/deployment/docker):
+**ChromaDB index is stale or corrupted** — delete and rebuild:
 
 ```shell
-docker run -p 6006:6006 -p 4317:4317 -i -t arizephoenix/phoenix:latest
+rm -rf .data/chroma/
+just serve                 # index will be rebuilt on startup
 ```
+
+**Embedding dimension mismatch** — ensure `[embedding] dims` in `config.toml` matches the actual output of your chosen embedding model. OpenAI `text-embedding-3-small` = 1536, `text-embedding-3-large` = 3072, `text-embedding-ada-002` = 1536.
 
 ## License
 
 🧑‍💻 The software itself is licensed under AGPL-3.0.
 
-📒 The default CoC module, [_“Clean Up, Aisle Four!”_][a4] is written by [Dr. Michael C. LaBossiere][mc]. All rights reserved to the original author. Adopted here with permission.
+📒 The default CoC module, [_"Clean Up, Aisle Four!"_][a4] is written by [Dr. Michael C. LaBossiere][mc]. All rights reserved to the original author. Adopted here with permission.
 
 (A "CoC module" is also known as a CoC scenario, campaign, or adventure. It comes in the form of a booklet. Some CoC modules come with their own rulebooks. Since this project is just between the user and the chatbot, let's choose a single-player module.)
 
