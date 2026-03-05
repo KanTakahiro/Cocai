@@ -50,7 +50,10 @@ class ToolForConsultingTheModule:
     ):
         logger = logging.getLogger("ToolForConsultingTheModule")
 
-        chroma_client = chromadb.PersistentClient(path=chroma_path)
+        chroma_client = chromadb.PersistentClient(
+            path=chroma_path,
+            settings=chromadb.config.Settings(anonymized_telemetry=False),
+        )
         chroma_collection = chroma_client.get_or_create_collection(collection)
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
 
