@@ -9,32 +9,20 @@ from llama_index.core.agent.workflow import AgentStream, FunctionAgent
 from llama_index.core.callbacks import CallbackManager, LlamaDebugHandler
 from llama_index.core.memory import Memory
 from llama_index.core.workflow import Context
-from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.memory.mem0 import Mem0Memory
-from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
 
 from agentic_tools import AgentContextAwareToolRetriever as ToolProvider
 from agentic_tools.misc import ToolForConsultingTheModule
 from async_panes.history import update_history_if_needed
 from async_panes.pane_update_manager import BackgroundPaneUpdateManager
-from async_panes.scene import update_scene_if_needed
 from config import AppConfig
+
 from state import GameState
 from utils import set_up_data_layer
 
 logger = logging.getLogger(__name__)
 
 set_up_data_layer()
-
-try:
-    # "Phoenix can display in real time the traces automatically collected from your LlamaIndex application."
-    # https://docs.llamaindex.ai/en/stable/module_guides/observability/observability.html
-    from phoenix.otel import register
-
-    tracer_provider = register()
-    LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
-except Exception as e:
-    logger.warning(f"Failed to register Phoenix OpenTelemetry instrumentation: {e}")
 
 
 def create_callback_manager() -> CallbackManager:
@@ -62,53 +50,57 @@ def create_callback_manager() -> CallbackManager:
     return CallbackManager(cast(List[BaseCallbackHandler], callback_handlers))
 
 
+def _setup_tracing(app_config: AppConfig) -> None:
+    """Enable Arize Phoenix OpenTelemetry tracing if configured."""
+    if not app_config.tracing_enabled:
+        return
+    try:
+        from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
+        from phoenix.otel import register
+
+        kwargs = {}
+        if app_config.tracing_endpoint:
+            kwargs["endpoint"] = app_config.tracing_endpoint
+        tracer_provider = register(**kwargs)
+        LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
+        logger.info("Arize Phoenix tracing enabled.")
+    except Exception as e:
+        logger.warning(f"Failed to register Phoenix OpenTelemetry instrumentation: {e}")
+
+
 def set_up_llama_index(app_config: AppConfig):
     """
     One-time setup code for shared objects across all AgentRunners.
+    LLM/embedding initializations must happen inside @cl.on_chat_start (not module scope)
+    so that Phoenix traces attach correctly to Agent Steps.
     """
     logger = logging.getLogger("set_up_llama_index")
-    # ============= Beginning of the code block for wiring on to models. =============
-    # At least when Chainlit is involved, LLM initializations must happen upon the `@cl.on_chat_start` event,
-    # not in the global scope.
-    # Otherwise, it messes up with Arize Phoenix: LLM calls won't be captured as parts of an Agent Step.
-    if app_config.openai_api_key:
-        logger.info("Using OpenAI API.")
-        from llama_index.llms.openai import OpenAI
 
-        Settings.llm = OpenAI(
-            model="gpt-4o-mini",
-            api_key=app_config.openai_api_key,
-            is_function_calling_model=True,
-            is_chat_model=True,
-        )
-    elif app_config.together_api_key:
-        logger.info("Using Together AI API.")
-        from llama_index.llms.openai_like import OpenAILike
+    from llama_index.embeddings.openai import OpenAIEmbedding
+    from llama_index.llms.openai_like import OpenAILike
 
-        Settings.llm = OpenAILike(
-            model="meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
-            api_base="https://api.together.xyz/v1",
-            api_key=app_config.together_api_key,
-            is_function_calling_model=True,
-            is_chat_model=True,
-        )
-    else:
-        logger.info("Using Ollama's OpenAI-compatible API.")
-        from llama_index.llms.openai_like import OpenAILike
-
-        Settings.llm = OpenAILike(
-            model=app_config.ollama_llm_id,
-            api_base=app_config.ollama_base_url + "/v1",
-            api_key="ollama",
-            is_function_calling_model=True,
-            is_chat_model=True,
-        )
-
-    Settings.embed_model = OllamaEmbedding(
-        model_name=app_config.ollama_embed_model_id,
-        base_url=app_config.ollama_base_url,
+    logger.info(
+        "LLM: %s @ %s", app_config.llm_model, app_config.llm_api_base
     )
-    # ============= End of the code block for wiring on to models. =============
+    Settings.llm = OpenAILike(
+        model=app_config.llm_model,
+        api_base=app_config.llm_api_base,
+        api_key=app_config.llm_api_key,
+        is_function_calling_model=True,
+        is_chat_model=True,
+    )
+
+    logger.info(
+        "Embedding: %s @ %s (dims=%d)",
+        app_config.embed_model,
+        app_config.embed_api_base,
+        app_config.embed_dims,
+    )
+    Settings.embed_model = OpenAIEmbedding(
+        model=app_config.embed_model,
+        api_base=app_config.embed_api_base,
+        api_key=app_config.embed_api_key,
+    )
 
     # Override the default system prompt for ReAct chats.
     with open("prompts/system_prompt.md", encoding="utf-8") as f:
@@ -118,6 +110,8 @@ def set_up_llama_index(app_config: AppConfig):
         game_module_summary = ToolForConsultingTheModule(
             path_to_module_folder=Path(app_config.game_module_path),
             should_reuse_existing_index=app_config.should_reuse_existing_index,
+            chroma_path=app_config.chroma_path,
+            collection=app_config.rag_collection,
         ).consult_the_game_module(
             "Story background, character requirements, and keeper's notes."
         )
@@ -170,7 +164,8 @@ async def set_starters(user=None, default_path: str | None = None):
 @cl.on_chat_start
 async def factory():
     # Build LLMs/tools and prompts per session to avoid global background resources
-    app_config = AppConfig.from_env()
+    app_config = AppConfig.from_config()
+    _setup_tracing(app_config)
     my_system_prompt = set_up_llama_index(app_config)
     # Each chat session should have his own agent runner, because each chat session has different chat histories.
     key = cl.user_session.get("id")
@@ -189,7 +184,7 @@ async def factory():
     async with agent_ctx.store.edit_state() as ctx_state:
         ctx_state["user-visible"] = user_visible_game_state
 
-    agent.tool_retriever = ToolProvider(agent_ctx)
+    agent.tool_retriever = ToolProvider(agent_ctx, app_config=app_config)
 
     cl.user_session.set(
         "agent",
@@ -214,73 +209,59 @@ async def factory():
 
 def __prepare_memory(key, app_config: AppConfig) -> Memory | Mem0Memory:
     logger = logging.getLogger("prepare_memory")
-    if app_config.disable_memory:
-        logger.info("Memory is disabled. Using defaults.")
+    if not app_config.memory_enabled:
+        logger.info("Memory disabled in config. Using in-process chat store.")
         return Memory.from_defaults(session_id="my_session", token_limit=40000)
     if app_config.mem0_api_key:
-        logger.info("Using Mem0 API.")
-        memory = Mem0Memory.from_client(
+        logger.info("Using Mem0 Cloud API.")
+        return Mem0Memory.from_client(
             context={"user_id": key},
             api_key=app_config.mem0_api_key,
-            search_msg_limit=4,  # optional, default is 5
+            search_msg_limit=4,
             version="v1.1",
         )
-    else:
-        logger.info(
-            "Using local Mem0, because the env. var. `MEM0_API_KEY` wasn't found."
+
+    logger.info("Using local Mem0 with ChromaDB vector store.")
+    mem0_config = {
+        "version": "v1.1",
+        "vector_store": {
+            "provider": "chroma",
+            "config": {
+                "collection_name": app_config.mem_collection,
+                "path": app_config.chroma_path,
+            },
+        },
+        "embedder": {
+            "provider": "openai",
+            "config": {
+                "model": app_config.embed_model,
+                "embedding_dims": app_config.embed_dims,
+                "openai_base_url": app_config.embed_api_base,
+                "api_key": app_config.embed_api_key,
+            },
+        },
+        "llm": {
+            "provider": "openai",
+            "config": {
+                "model": app_config.llm_model,
+                "openai_base_url": app_config.llm_api_base,
+                "api_key": app_config.llm_api_key,
+                "temperature": 0,
+                "max_tokens": 8000,
+            },
+        },
+    }
+    try:
+        memory = Mem0Memory.from_config(
+            config=mem0_config,
+            context={"user_id": key},
         )
-        mem0_config = {
-            "version": "v1.1",
-            "vector_store": {
-                "provider": "qdrant",
-                "config": {
-                    "collection_name": "cocai",
-                    "embedding_model_dims": 768,  # Change this according to your local model's dimensions
-                    "host": "localhost",
-                    "port": 6333,
-                },
-            },
-            "embedder": {
-                "provider": "ollama",
-                "config": {
-                    "model": app_config.ollama_embed_model_id,
-                    "ollama_base_url": app_config.ollama_base_url,
-                    "embedding_dims": 768,  # Change this according to your local model's dimensions
-                },
-            },
-        }
-        if app_config.openai_api_key:
-            logger.info("Using OpenAI API for Mem0's LLM calls.")
-            mem0_config["llm"] = {
-                "provider": "openai",
-                "config": {
-                    "model": "gpt-4o-mini",
-                    "temperature": 0,
-                    "max_tokens": 8000,
-                },
-            }
-        else:
-            logger.info("Using Ollama's OpenAI-compatible API for Mem0's LLM calls.")
-            mem0_config["llm"] = {
-                "provider": "ollama",
-                "config": {
-                    "model": app_config.ollama_llm_id,
-                    "temperature": 0,
-                    "max_tokens": 8000,
-                    "ollama_base_url": app_config.ollama_base_url,
-                },
-            }
-        try:
-            memory = Mem0Memory.from_config(
-                config=mem0_config,
-                context={"user_id": key},
-            )
-        except Exception as e:
-            logger.error(
-                "Failed to set up Mem0 memory. LlamaIndex will use default implementation (SimpleChatStore) instead.",
-                exc_info=e,
-            )
-            memory = Memory.from_defaults(session_id="my_session", token_limit=40000)
+    except Exception as e:
+        logger.error(
+            "Failed to set up Mem0 memory. Falling back to in-process chat store.",
+            exc_info=e,
+        )
+        memory = Memory.from_defaults(session_id="my_session", token_limit=40000)
     return memory
 
 
@@ -374,17 +355,3 @@ async def handle_message_from_user(message: cl.Message):
         )
         logger.info("Scheduled background history update (gen=%s)", gen)
 
-    if config.enable_auto_scene_update:
-        manager.schedule(
-            "scene",
-            gen,
-            lambda: update_scene_if_needed(
-                ctx=agent_ctx,
-                memory=agent_memory,
-                last_user_msg=message.content,
-                last_agent_msg=agent_text,
-            ),
-            timeout=120.0,
-            debounce=0.15,
-        )
-        logger.info("Scheduled background scene update (gen=%s)", gen)

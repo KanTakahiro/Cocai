@@ -6,7 +6,7 @@ from functools import partial
 from pathlib import Path
 from typing import Optional
 
-import qdrant_client
+import chromadb
 from llama_index.core import (
     Settings,
     SimpleDirectoryReader,
@@ -16,7 +16,7 @@ from llama_index.core import (
 from llama_index.core.base.base_query_engine import BaseQueryEngine
 from llama_index.core.tools import FunctionTool
 from llama_index.core.workflow import Context
-from llama_index.vector_stores.qdrant import QdrantVectorStore
+from llama_index.vector_stores.chroma import ChromaVectorStore
 from pydantic import Field
 
 from events import broadcaster
@@ -45,58 +45,37 @@ class ToolForConsultingTheModule:
         self,
         path_to_module_folder: Path = Path("game_modules/Clean-Up-Aisle-Four"),
         should_reuse_existing_index: bool = True,
+        chroma_path: str = ".data/chroma",
+        collection: str = "game_module",
     ):
         logger = logging.getLogger("ToolForConsultingTheModule")
 
-        qdrant_host = os.environ.get("QDRANT_HOST", "localhost")
-        qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
-        collection = os.environ.get("QDRANT_COLLECTION", "game_module")
+        chroma_client = chromadb.PersistentClient(path=chroma_path)
+        chroma_collection = chroma_client.get_or_create_collection(collection)
+        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
 
-        index: VectorStoreIndex
-        vector_store = None
-
-        try:
-            client = qdrant_client.QdrantClient(host=qdrant_host, port=qdrant_port)
-            vector_store = QdrantVectorStore(client=client, collection_name=collection)
-            if client.collection_exists(collection) and should_reuse_existing_index:
-                logger.info(
-                    f"Qdrant collection '{collection}' exists at {qdrant_host}:{qdrant_port}. Loading."
-                )
-                index = VectorStoreIndex.from_vector_store(vector_store=vector_store)
-            else:
-                logger.info(
-                    "Qdrant collection absent or reuse disabled. Building index from documents."
-                )
-                documents = SimpleDirectoryReader(
-                    input_dir=str(path_to_module_folder),
-                    recursive=True,
-                    required_exts=[".md", ".txt"],
-                ).load_data()
-                storage_context = StorageContext.from_defaults(
-                    vector_store=vector_store
-                )
-                index = VectorStoreIndex.from_documents(
-                    documents=documents,
-                    storage_context=storage_context,
-                    show_progress=True,
-                )
-        except Exception as e:
-            # Fallback to in-memory index if Qdrant is unavailable
-            logger.warning(
-                "Qdrant unavailable or misconfigured; falling back to in-memory vector store.",
-                exc_info=e,
+        if chroma_collection.count() > 0 and should_reuse_existing_index:
+            logger.info(
+                "ChromaDB collection '%s' has %d documents. Loading existing index.",
+                collection,
+                chroma_collection.count(),
+            )
+            index = VectorStoreIndex.from_vector_store(vector_store=vector_store)
+        else:
+            logger.info(
+                "ChromaDB collection empty or reuse disabled. Building index from documents in %s.",
+                path_to_module_folder,
             )
             documents = SimpleDirectoryReader(
                 input_dir=str(path_to_module_folder),
-                # https://docs.llamaindex.ai/en/stable/module_guides/loading/simpledirectoryreader.html#reading-from-subdirectories
                 recursive=True,
-                # https://docs.llamaindex.ai/en/stable/module_guides/loading/simpledirectoryreader.html#restricting-the-files-loaded
-                # Before including image files here, `mamba install pillow`.
-                # Before including audio files here, `pip install openai-whisper`.
                 required_exts=[".md", ".txt"],
             ).load_data()
+            storage_context = StorageContext.from_defaults(vector_store=vector_store)
             index = VectorStoreIndex.from_documents(
-                documents=documents, show_progress=True
+                documents=documents,
+                storage_context=storage_context,
+                show_progress=True,
             )
 
         self.query_engine = index.as_query_engine(

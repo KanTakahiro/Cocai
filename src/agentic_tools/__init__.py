@@ -9,10 +9,6 @@ from llama_index.core.workflow import Context
 from llama_index.tools.tavily_research import TavilyToolSpec
 
 from .create_character import build_tool_for_creating_character
-from .illustrate_scene import (
-    build_tool_for_setting_illustration_url,
-    illustrate_a_scene,
-)
 from .misc import (
     ToolForConsultingTheModule,
     ToolForSuggestingChoices,
@@ -31,7 +27,7 @@ class AgentContextAwareToolRetriever(ObjectRetriever[BaseTool]):
     but the agentWorkflow needs either a list of tools upfront or a tool retriever.
     """
 
-    def __init__(self, ctx: Context):
+    def __init__(self, ctx: Context, app_config=None):
         logger = logging.getLogger("AgentContextAwareToolRetriever")
         if api_key := os.environ.get("TAVILY_API_KEY", None):
             # Manage your API keys here: https://app.tavily.com/home
@@ -43,24 +39,33 @@ class AgentContextAwareToolRetriever(ObjectRetriever[BaseTool]):
             ).to_tool_list()
         else:
             tavily_tool = []
+
+        # Build RAG tool with config-aware ChromaDB path/collection
+        rag_kwargs = {}
+        if app_config is not None:
+            from pathlib import Path
+
+            rag_kwargs = {
+                "path_to_module_folder": Path(app_config.game_module_path),
+                "should_reuse_existing_index": app_config.should_reuse_existing_index,
+                "chroma_path": app_config.chroma_path,
+                "collection": app_config.rag_collection,
+            }
+
         self._tools: List[FunctionTool] = tavily_tool + [
             FunctionTool.from_defaults(ToolForSuggestingChoices().suggest_choices),
             FunctionTool.from_defaults(
-                ToolForConsultingTheModule().consult_the_game_module,
+                ToolForConsultingTheModule(**rag_kwargs).consult_the_game_module,
             ),
             FunctionTool.from_defaults(roll_a_dice),
             FunctionTool.from_defaults(roll_a_skill),
-            FunctionTool.from_defaults(illustrate_a_scene),
             update_a_stat_tool,
             build_tool_for_creating_character(ctx),
             build_tool_for_recording_a_clue(ctx),
-            build_tool_for_setting_illustration_url(ctx),
         ]
         self._ctx = ctx
 
     def retrieve(self, str_or_query_bundle: QueryType) -> List[BaseTool]:
-        # Here you can customize which tools to return based on the context.
-        # For simplicity, we return all tools.
         return self._tools  # type: ignore
 
     async def aretrieve(self, str_or_query_bundle: QueryType) -> List[BaseTool]:

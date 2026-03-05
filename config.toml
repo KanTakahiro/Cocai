@@ -1,0 +1,40 @@
+# CoCai configuration
+# Non-secret settings — safe to commit to git.
+# API keys go in .env (see .env.example), which is git-ignored.
+
+[llm]
+# Any OpenAI-compatible endpoint: OpenAI, Together AI, Groq, local vLLM, etc.
+api_base = "https://api.openai.com/v1"
+model    = "gpt-4o"
+
+[embedding]
+api_base = "https://api.openai.com/v1"
+model    = "text-embedding-3-small"
+# Dimensions must match the chosen model.
+# text-embedding-3-small = 1536, text-embedding-3-large = 3072, text-embedding-ada-002 = 1536
+dims     = 1536
+
+[vector_store]
+# Local ChromaDB persistence directory (created automatically on first run).
+path           = ".data/chroma"
+rag_collection = "game_module"   # RAG index for game module documents
+mem_collection = "cocai"         # Mem0 episodic memory
+
+[memory]
+enabled = true
+# Set to false to disable Mem0 and fall back to in-process chat history.
+
+[tracing]
+enabled = false
+# If true, send OpenTelemetry traces to an Arize Phoenix instance.
+# Start Phoenix with: uv run phoenix serve  (no Docker required)
+# endpoint = "http://localhost:4317"
+
+[game_module]
+path        = "game_modules/Clean-Up-Aisle-Four"
+preread     = false   # Pre-summarise the module on startup (slow, but better context)
+reuse_index = true    # Reuse existing ChromaDB index if present
+
+[auto_update]
+history = true    # Summarise story history after each exchange (background task)
+scene   = false   # Scene illustration auto-update (disabled — image gen removed)

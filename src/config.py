@@ -1,22 +1,24 @@
 """Central application configuration for Cocai.
 
-Provides a single dataclass `AppConfig` that captures all environment-driven
-settings so they can be:
+Provides a single dataclass `AppConfig` that holds all settings so they can be:
   * Unit tested without patching os.environ everywhere.
   * Potentially surfaced in a future GUI for live configuration.
-  * Serialized (later) for persistence.
 
-Environment precedence / notes:
-  - LLM provider precedence: OPENAI_API_KEY > TOGETHER_AI_API_KEY > Ollama local.
-  - Memory: DISABLE_MEMORY short-circuits; else MEM0_API_KEY selects cloud Mem0; else local Mem0; fallback to default Memory on error.
-    - Feature flags use forgiving boolean parsing via `env_flag`.
+Configuration is split across two files:
+  - config.toml  — non-secret settings (safe to commit to git)
+  - .env         — API keys and secrets (git-ignored)
+
+The `from_config()` classmethod reads both.  For tests, `from_dict()` accepts
+a plain dict so no files are needed on disk.
 """
 
 from __future__ import annotations
 
 import os
+import tomllib
 from dataclasses import dataclass
-from typing import Mapping
+from pathlib import Path
+from typing import Any, Mapping
 
 from utils import FALSY_STRINGS, TRUTHY_STRINGS
 
@@ -29,9 +31,6 @@ def env_flag(name: str, default: bool = True) -> bool:
     - Falsy values (case-insensitive): 0, false, no, n, off, f
     - Any other non-empty value defaults to False, and missing env var returns
       the provided default.
-
-    This function is intentionally permissive to avoid surprises in
-    container/CI environments where flags can be provided in varying forms.
     """
     raw = os.environ.get(name)
     if raw is None:
@@ -46,72 +45,85 @@ def env_flag(name: str, default: bool = True) -> bool:
 
 @dataclass(slots=True)
 class AppConfig:
-    # LLM / Embeddings
-    openai_api_key: str | None = None
-    together_api_key: str | None = None
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_llm_id: str = "gpt-oss:20b"
-    ollama_embed_model_id: str = "nomic-embed-text:latest"
+    # LLM
+    llm_api_base: str = "https://api.openai.com/v1"
+    llm_model: str = "gpt-4o"
+    llm_api_key: str = ""
 
-    # Retrieval / Module
+    # Embedding
+    embed_api_base: str = "https://api.openai.com/v1"
+    embed_model: str = "text-embedding-3-small"
+    embed_dims: int = 1536
+    embed_api_key: str = ""
+
+    # Vector store (ChromaDB)
+    chroma_path: str = ".data/chroma"
+    rag_collection: str = "game_module"
+    mem_collection: str = "cocai"
+
+    # Memory (Mem0)
+    memory_enabled: bool = True
+    mem0_api_key: str | None = None
+
+    # Tracing (Arize Phoenix, optional)
+    tracing_enabled: bool = False
+    tracing_endpoint: str | None = None
+
+    # Game module
     game_module_path: str = "game_modules/Clean-Up-Aisle-Four"
     should_preread_game_module: bool = False
     should_reuse_existing_index: bool = True
 
-    # Memory
-    disable_memory: bool = False
-    mem0_api_key: str | None = None
-
-    # Auto update features
+    # Auto-update panes
     enable_auto_history_update: bool = True
-    enable_auto_scene_update: bool = True
-
-    # MinIO / Storage
-    minio_access_key: str = "minioadmin"
-    minio_secret_key: str = "minioadmin"
-
-    # Stable Diffusion (optional)
-    stable_diffusion_api_url: str = "http://127.0.0.1:7860"
-
-    # Qdrant
-    qdrant_host: str = "localhost"
-    qdrant_port: int = 6333
-    qdrant_collection: str = "game_module"
-
-    @property
-    def llm_provider(self) -> str:
-        if self.openai_api_key:
-            return "openai"
-        if self.together_api_key:
-            return "together"
-        return "ollama"
+    enable_auto_scene_update: bool = False
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> AppConfig:
-        e = env or os.environ
+    def from_config(
+        cls,
+        toml_path: str | Path = "config.toml",
+        env: Mapping[str, str] | None = None,
+    ) -> AppConfig:
+        """Load config.toml for non-secret settings, then overlay API keys from env/.env."""
+        e = env if env is not None else os.environ
+        toml_path = Path(toml_path)
+
+        cfg: dict[str, Any] = {}
+        if toml_path.exists():
+            with open(toml_path, "rb") as f:
+                cfg = tomllib.load(f)
+
+        llm = cfg.get("llm", {})
+        emb = cfg.get("embedding", {})
+        vs = cfg.get("vector_store", {})
+        mem = cfg.get("memory", {})
+        tr = cfg.get("tracing", {})
+        gm = cfg.get("game_module", {})
+        au = cfg.get("auto_update", {})
+
         return cls(
-            openai_api_key=e.get("OPENAI_API_KEY"),
-            together_api_key=e.get("TOGETHER_AI_API_KEY"),
-            ollama_base_url=e.get("OLLAMA_BASE_URL", "http://localhost:11434"),
-            ollama_llm_id=e.get("OLLAMA_LLM_ID", "gpt-oss:20b"),
-            ollama_embed_model_id=e.get(
-                "OLLAMA_EMBED_MODEL_ID", "nomic-embed-text:latest"
-            ),
-            game_module_path=e.get(
-                "GAME_MODULE_PATH", "game_modules/Clean-Up-Aisle-Four"
-            ),
-            should_preread_game_module=env_flag("SHOULD_PREREAD_GAME_MODULE", False),
-            should_reuse_existing_index=env_flag("SHOULD_REUSE_EXISTING_INDEX", True),
-            disable_memory=env_flag("DISABLE_MEMORY", False),
-            mem0_api_key=e.get("MEM0_API_KEY"),
-            enable_auto_history_update=env_flag("ENABLE_AUTO_HISTORY_UPDATE", True),
-            enable_auto_scene_update=env_flag("ENABLE_AUTO_SCENE_UPDATE", True),
-            minio_access_key=e.get("MINIO_ACCESS_KEY", "minioadmin"),
-            minio_secret_key=e.get("MINIO_SECRET_KEY", "minioadmin"),
-            stable_diffusion_api_url=e.get(
-                "STABLE_DIFFUSION_API_URL", "http://127.0.0.1:7860"
-            ),
-            qdrant_host=e.get("QDRANT_HOST", "localhost"),
-            qdrant_port=int(e.get("QDRANT_PORT", "6333")),
-            qdrant_collection=e.get("QDRANT_COLLECTION", "game_module"),
+            llm_api_base=llm.get("api_base", "https://api.openai.com/v1"),
+            llm_model=llm.get("model", "gpt-4o"),
+            llm_api_key=e.get("LLM_API_KEY", ""),
+            embed_api_base=emb.get("api_base", "https://api.openai.com/v1"),
+            embed_model=emb.get("model", "text-embedding-3-small"),
+            embed_dims=int(emb.get("dims", 1536)),
+            embed_api_key=e.get("EMBED_API_KEY", e.get("LLM_API_KEY", "")),
+            chroma_path=vs.get("path", ".data/chroma"),
+            rag_collection=vs.get("rag_collection", "game_module"),
+            mem_collection=vs.get("mem_collection", "cocai"),
+            memory_enabled=bool(mem.get("enabled", True)),
+            mem0_api_key=e.get("MEM0_API_KEY") or None,
+            tracing_enabled=bool(tr.get("enabled", False)),
+            tracing_endpoint=tr.get("endpoint") or None,
+            game_module_path=gm.get("path", "game_modules/Clean-Up-Aisle-Four"),
+            should_preread_game_module=bool(gm.get("preread", False)),
+            should_reuse_existing_index=bool(gm.get("reuse_index", True)),
+            enable_auto_history_update=bool(au.get("history", True)),
+            enable_auto_scene_update=bool(au.get("scene", False)),
         )
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> AppConfig:
+        """Construct directly from a plain dict — intended for tests only."""
+        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})

@@ -1,70 +1,145 @@
+from pathlib import Path
+
 from config import AppConfig, env_flag
 
 
-def test_config_defaults(monkeypatch):
-    # Clear potentially set vars
-    for k in [
-        "OPENAI_API_KEY",
-        "TOGETHER_AI_API_KEY",
-        "MEM0_API_KEY",
-        "DISABLE_MEMORY",
-        "SHOULD_PREREAD_GAME_MODULE",
-    ]:
-        monkeypatch.delenv(k, raising=False)
-    cfg = AppConfig.from_env({})
-    assert cfg.llm_provider == "ollama"
+# ---------------------------------------------------------------------------
+# Defaults
+# ---------------------------------------------------------------------------
+
+
+def test_config_defaults():
+    cfg = AppConfig()
+    assert cfg.llm_api_base == "https://api.openai.com/v1"
+    assert cfg.llm_model == "gpt-4o"
+    assert cfg.embed_model == "text-embedding-3-small"
+    assert cfg.embed_dims == 1536
+    assert cfg.chroma_path == ".data/chroma"
+    assert cfg.rag_collection == "game_module"
+    assert cfg.mem_collection == "cocai"
+    assert cfg.memory_enabled is True
+    assert cfg.tracing_enabled is False
     assert cfg.game_module_path.endswith("Clean-Up-Aisle-Four")
     assert cfg.should_preread_game_module is False
-    assert cfg.disable_memory is False
     assert cfg.enable_auto_history_update is True
+    assert cfg.enable_auto_scene_update is False
 
 
-def test_config_llm_precedence_openai_over_together(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
-    monkeypatch.setenv("TOGETHER_AI_API_KEY", "sk-together")
-    cfg = AppConfig.from_env()
-    assert cfg.llm_provider == "openai"
+def test_config_from_dict_overrides():
+    cfg = AppConfig.from_dict(
+        {
+            "llm_model": "gpt-4-turbo",
+            "embed_dims": 3072,
+            "memory_enabled": False,
+        }
+    )
+    assert cfg.llm_model == "gpt-4-turbo"
+    assert cfg.embed_dims == 3072
+    assert cfg.memory_enabled is False
+    assert cfg.tracing_enabled is False  # unspecified -> default
 
 
-def test_config_llm_precedence_together_over_ollama(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("TOGETHER_AI_API_KEY", "sk-together")
-    cfg = AppConfig.from_env()
-    assert cfg.llm_provider == "together"
+# ---------------------------------------------------------------------------
+# from_config -- reads a real TOML file
+# ---------------------------------------------------------------------------
 
 
-def test_config_preread_flag(monkeypatch):
-    monkeypatch.setenv("SHOULD_PREREAD_GAME_MODULE", "yes")
-    cfg = AppConfig.from_env()
+def test_from_config_reads_toml(tmp_path):
+    toml = tmp_path / "config.toml"
+    toml.write_text(
+        """
+[llm]
+api_base = "https://api.together.xyz/v1"
+model = "meta-llama/Llama-3-70b-chat-hf"
+
+[embedding]
+api_base = "https://api.together.xyz/v1"
+model = "togethercomputer/m2-bert-80M-8k-retrieval"
+dims = 768
+
+[vector_store]
+path = "/tmp/chroma"
+rag_collection = "my_module"
+mem_collection = "my_mem"
+
+[memory]
+enabled = false
+
+[tracing]
+enabled = true
+endpoint = "http://localhost:4317"
+
+[game_module]
+path = "game_modules/Other"
+preread = true
+reuse_index = false
+
+[auto_update]
+history = false
+scene = false
+"""
+    )
+    env = {"LLM_API_KEY": "sk-llm", "EMBED_API_KEY": "sk-emb"}
+    cfg = AppConfig.from_config(toml_path=toml, env=env)
+
+    assert cfg.llm_api_base == "https://api.together.xyz/v1"
+    assert cfg.llm_model == "meta-llama/Llama-3-70b-chat-hf"
+    assert cfg.llm_api_key == "sk-llm"
+    assert cfg.embed_dims == 768
+    assert cfg.embed_api_key == "sk-emb"
+    assert cfg.chroma_path == "/tmp/chroma"
+    assert cfg.rag_collection == "my_module"
+    assert cfg.mem_collection == "my_mem"
+    assert cfg.memory_enabled is False
+    assert cfg.tracing_enabled is True
+    assert cfg.tracing_endpoint == "http://localhost:4317"
+    assert cfg.game_module_path == "game_modules/Other"
     assert cfg.should_preread_game_module is True
+    assert cfg.should_reuse_existing_index is False
+    assert cfg.enable_auto_history_update is False
 
 
-def test_config_memory_disable(monkeypatch):
-    monkeypatch.setenv("DISABLE_MEMORY", "1")
-    cfg = AppConfig.from_env()
-    assert cfg.disable_memory is True
+def test_from_config_embed_key_falls_back_to_llm_key(tmp_path):
+    toml = tmp_path / "config.toml"
+    toml.write_text("")  # empty -> all defaults
+    env = {"LLM_API_KEY": "sk-shared"}
+    cfg = AppConfig.from_config(toml_path=toml, env=env)
+    assert cfg.llm_api_key == "sk-shared"
+    assert cfg.embed_api_key == "sk-shared"
 
 
-def test_config_mem0(monkeypatch):
-    monkeypatch.delenv("DISABLE_MEMORY", raising=False)
-    monkeypatch.setenv("MEM0_API_KEY", "mem0-key")
-    cfg = AppConfig.from_env()
-    assert cfg.mem0_api_key == "mem0-key"
+def test_from_config_missing_toml_uses_defaults(tmp_path):
+    cfg = AppConfig.from_config(toml_path=tmp_path / "nonexistent.toml", env={})
+    assert cfg.llm_model == "gpt-4o"
+    assert cfg.embed_dims == 1536
+
+
+def test_from_config_mem0_cloud_key(tmp_path):
+    toml = tmp_path / "config.toml"
+    toml.write_text("")
+    env = {"LLM_API_KEY": "sk-x", "MEM0_API_KEY": "m0-cloud"}
+    cfg = AppConfig.from_config(toml_path=toml, env=env)
+    assert cfg.mem0_api_key == "m0-cloud"
+
+
+# ---------------------------------------------------------------------------
+# env_flag helper
+# ---------------------------------------------------------------------------
 
 
 def test_env_bool_helper_true(monkeypatch):
-    monkeypatch.setenv("SHOULD_REUSE_EXISTING_INDEX", "1")
-    assert env_flag("SHOULD_REUSE_EXISTING_INDEX") is True
-    monkeypatch.setenv("SHOULD_REUSE_EXISTING_INDEX", "true")
-    assert env_flag("SHOULD_REUSE_EXISTING_INDEX") is True
-    monkeypatch.setenv("SHOULD_REUSE_EXISTING_INDEX", "on")
-    assert env_flag("SHOULD_REUSE_EXISTING_INDEX") is True
+    monkeypatch.setenv("SOME_FLAG", "1")
+    assert env_flag("SOME_FLAG") is True
+    monkeypatch.setenv("SOME_FLAG", "true")
+    assert env_flag("SOME_FLAG") is True
+    monkeypatch.setenv("SOME_FLAG", "on")
+    assert env_flag("SOME_FLAG") is True
 
 
 def test_env_bool_helper_false(monkeypatch):
-    monkeypatch.setenv("SHOULD_REUSE_EXISTING_INDEX", "0")
-    assert env_flag("SHOULD_REUSE_EXISTING_INDEX") is False
-    monkeypatch.setenv("SHOULD_REUSE_EXISTING_INDEX", "false")
-    assert env_flag("SHOULD_REUSE_EXISTING_INDEX") is False
-    monkeypatch.setenv("SHOULD_REUSE_EXISTING_INDEX", "off")
-    assert env_flag("SHOULD_REUSE_EXISTING_INDEX") is False
+    monkeypatch.setenv("SOME_FLAG", "0")
+    assert env_flag("SOME_FLAG") is False
+    monkeypatch.setenv("SOME_FLAG", "false")
+    assert env_flag("SOME_FLAG") is False
+    monkeypatch.setenv("SOME_FLAG", "off")
+    assert env_flag("SOME_FLAG") is False
