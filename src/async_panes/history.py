@@ -39,28 +39,29 @@ async def update_history_if_needed(
     try:
         broadcaster.publish({"type": "history_status", "phase": "evaluating"})
         should = await __should_update_history(transcript)
+        logger.info("History update decision: %s", "YES" if should else "NO")
         if not should:
             broadcaster.publish({"type": "history_status", "phase": "unchanged"})
             return
         broadcaster.publish({"type": "history_status", "phase": "summarizing"})
-        if await __should_update_history(transcript):
-            read_only_user_visible_state: GameState = await ctx.store.get(
-                "user-visible"
-            )
-            current_history = read_only_user_visible_state.history
-            new_summary = await __summarize_story(transcript, current_history)
-            async with ctx.store.edit_state() as ctx_state:
-                user_visible_state: GameState = ctx_state.get("user-visible")
-                user_visible_state.history = new_summary
-                try:
-                    broadcaster.publish(
-                        {"type": "history", "history": user_visible_state.history}
-                    )
-                    broadcaster.publish({"type": "history_status", "phase": "updated"})
-                except Exception as e:
-                    logger.error("Failed to publish updated history.", exc_info=e)
-        else:
-            broadcaster.publish({"type": "history_status", "phase": "unchanged"})
+        # Use the already-computed `should` result — do NOT call __should_update_history
+        # a second time.  The function is non-deterministic (LLM), so a second call can
+        # return NO and silently skip the update even though the first call returned YES.
+        read_only_user_visible_state: GameState = await ctx.store.get(
+            "user-visible"
+        )
+        current_history = read_only_user_visible_state.history
+        new_summary = await __summarize_story(transcript, current_history)
+        async with ctx.store.edit_state() as ctx_state:
+            user_visible_state: GameState = ctx_state.get("user-visible")
+            user_visible_state.history = new_summary
+            try:
+                broadcaster.publish(
+                    {"type": "history", "history": user_visible_state.history}
+                )
+                broadcaster.publish({"type": "history_status", "phase": "updated"})
+            except Exception as e:
+                logger.error("Failed to publish updated history.", exc_info=e)
     except asyncio.CancelledError:
         logger.info("auto_history_update task was cancelled")
         try:
@@ -81,6 +82,7 @@ def __format_recent(transcript: list[dict[str, str]], k: int) -> str:
 
 
 async def __should_update_history(transcript: list[dict[str, str]]) -> bool:
+    logger = logging.getLogger("auto_history_update")
     if not transcript:
         return False
     recent_text = __format_recent(transcript, k=6)
@@ -93,6 +95,7 @@ async def __should_update_history(transcript: list[dict[str, str]]) -> bool:
         "Answer strictly with YES or NO."
     )
     decision = await llm_complete_text(prompt)
+    logger.debug("__should_update_history LLM raw response: %r", decision)
     try:
         return decision.lower().startswith("y")
     except Exception:
