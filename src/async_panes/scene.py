@@ -4,8 +4,13 @@ Auto-detect significant scene changes and generate an illustration.
 Pipeline per exchange:
   1. Evaluate  — LLM decides if the scene/setting changed meaningfully.
   2. Describe  — LLM writes a concise image-generation prompt.
-  3. Image     — OpenAI-compatible images/generations endpoint produces the art.
-  4. Publish   — SSE broadcasts the URL to the play UI centre pane.
+  3. Image     — OpenRouter chat completions with modalities=["image"] produces the art.
+  4. Publish   — SSE broadcasts the base64 data-URL to the play UI centre pane.
+
+OpenRouter does NOT expose /images/generations.  Image-capable models are reached
+via POST /chat/completions with ``extra_body={"modalities": ["image"]}``.  The
+generated PNG is returned as a base64 data-URL inside
+``choices[0].message.images[0].image_url.url``.
 
 If image generation is disabled in config (`[image_generation] enabled = false`),
 the module only evaluates scene changes and signals "unchanged" — keeping the
@@ -127,26 +132,44 @@ async def __describe_visual_scene(transcript: list[dict[str, str]]) -> str:
 
 
 async def __generate_scene_image(description: str, app_config: AppConfig) -> str:
-    """Call the OpenAI-compatible images/generations endpoint and return the image URL."""
+    """Call OpenRouter's chat completions endpoint to generate a scene image.
+
+    OpenRouter routes image-capable models through the standard chat completions
+    path with a non-standard ``modalities`` body parameter rather than through
+    the OpenAI ``/images/generations`` endpoint (which it does not expose).
+    The generated image is returned as a base64 PNG data-URL embedded inside
+    ``choices[0].message.images[0].image_url.url``.
+    """
     logger = logging.getLogger("auto_scene_update")
     try:
         from openai import AsyncOpenAI
 
+        image_base = app_config.image_api_base or app_config.llm_api_base
         client = AsyncOpenAI(
             api_key=app_config.image_api_key,
-            base_url=app_config.llm_api_base,
+            base_url=image_base,
         )
-        response = await client.images.generate(
+        response = await client.chat.completions.create(
             model=app_config.image_model,
-            prompt=description,
-            n=1,
+            messages=[{"role": "user", "content": description}],
+            extra_body={"modalities": ["image"]},
         )
-        url = response.data[0].url if response.data else None
-        if not url:
-            logger.warning("Image generation returned no URL.")
-            return ""
-        logger.info("Scene image generated: %s", url)
-        return url
+        # OpenRouter embeds the image under a non-standard `images` key that is
+        # absent from the openai-python schema, so parse from the raw dict.
+        raw = response.model_dump()
+        choices = raw.get("choices") or []
+        message = (choices[0].get("message") or {}) if choices else {}
+        images = message.get("images") or []
+        if images:
+            data_url: str = (images[0].get("image_url") or {}).get("url", "")
+            if data_url:
+                logger.info(
+                    "Scene image generated (data URL, %d chars)", len(data_url)
+                )
+                return data_url
+
+        logger.warning("Image generation returned no image data in response.")
+        return ""
     except asyncio.CancelledError:
         raise
     except Exception as e:

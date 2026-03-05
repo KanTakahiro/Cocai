@@ -38,10 +38,20 @@ preread     = false   # Pre-summarise the module on startup (slow, but better co
 reuse_index = true    # Reuse existing ChromaDB index if present
 
 [image_generation]
-# Image generation via any OpenAI-compatible images/generations endpoint.
-# Uses the same api_base and LLM_API_KEY as [llm] by default.
-enabled = true
-model   = "bytedance-seed/seedream-4.5"
+# Image generation via OpenRouter's chat completions endpoint (NOT /images/generations).
+# OpenRouter routes image-capable models through POST /chat/completions with
+# the non-standard "modalities": ["image"] body parameter; the image is returned
+# as a base64 data-URL inside choices[0].message.images[].image_url.url.
+#
+# api_base: if omitted or empty, falls back to [llm] api_base automatically.
+# IMAGE_API_KEY in .env is used for auth; falls back to LLM_API_KEY if not set.
+#
+# Other OpenRouter image models to try:
+#   google/gemini-2.0-flash-exp:free  (free tier)
+#   recraft-ai/recraft-v3
+enabled  = true
+api_base = "https://openrouter.ai/api/v1"
+model    = "bytedance-seed/seedream-4.5"
 
 [auto_update]
 history = true   # Summarise story history after each exchange (background task)
