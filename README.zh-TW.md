@@ -172,6 +172,51 @@ Cocai 將在 `http://localhost:8000/chat` 啟動。
 - 每次代理回應後，Cocai 會選擇性地以一段簡短摘要更新左側歷史面板。此決策由 LLM 判斷，避免在純規則說明或後設討論時觸發更新。
 - 可在 `config.toml` 中設定 `[auto_update] history = false` 停用。
 
+### 使用其他劇本
+
+Cocai 預設搭載 [_"Clean Up, Aisle Four!"_][a4]。若要使用自己的劇本：
+
+**1. 準備劇本檔案**
+
+將劇本內容整理為 `.md` 或 `.txt` 格式，放置於 `game_modules/` 子目錄下：
+
+```
+game_modules/
+└── my-scenario/
+    ├── introduction.md
+    ├── npcs.md
+    ├── locations.md
+    └── ...
+```
+
+若劇本原本是單一大型 Markdown 檔案，建議先按標題層級拆分——較小的區塊能提升 RAG 檢索精準度：
+
+```shell
+uv run --with mdsplit -m mdsplit "my-scenario.md" -l 3 -t -o "game_modules/my-scenario/"
+```
+
+**2. 在 `config.toml` 指定新劇本**
+
+```toml
+[game_module]
+path        = "game_modules/my-scenario"   # 劇本目錄路徑
+preread     = false   # 設為 true 可在啟動時預先摘要劇本並加入系統提示（啟動較慢）
+reuse_index = true    # 若已有 ChromaDB 索引則直接沿用
+```
+
+**3. 刪除舊索引並重新啟動**
+
+切換劇本後，必須從頭重建向量索引：
+
+```shell
+rm -rf .data/chroma/
+just serve
+```
+
+啟動時會自動重建索引。開啟 `reuse_index = true` 後，後續重啟將直接載入已快取的索引。
+
+> **注意：** 每次只能啟用一個劇本。`[vector_store]` 中的 `rag_collection` 對應 ChromaDB 的 collection 名稱；若切換劇本但未刪除 `.data/chroma/`，將會載入舊的向量資料。
+
 ### 可選：使用 Arize Phoenix 追蹤
 
 若要啟用 LLM 呼叫追蹤（有助於除錯代理推理過程）：

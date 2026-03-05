@@ -172,6 +172,51 @@ Auto-updating history excerpt:
 - After each agent response, Cocai optionally refreshes the History pane with a concise summary of the story so far. The decision is made by the LLM to avoid updating on pure rules/meta clarifications.
 - Disable with `[auto_update] history = false` in `config.toml`.
 
+### Using a Different Game Module
+
+Cocai ships with [_"Clean Up, Aisle Four!"_][a4] as the default module. To use your own scenario:
+
+**1. Prepare the module files**
+
+Place your scenario text as `.md` or `.txt` files under `game_modules/`:
+
+```
+game_modules/
+└── my-scenario/
+    ├── introduction.md
+    ├── npcs.md
+    ├── locations.md
+    └── ...
+```
+
+If your module is a single large Markdown file, split it by heading level first — smaller chunks improve RAG retrieval quality:
+
+```shell
+uv run --with mdsplit -m mdsplit "my-scenario.md" -l 3 -t -o "game_modules/my-scenario/"
+```
+
+**2. Point `config.toml` at the new module**
+
+```toml
+[game_module]
+path        = "game_modules/my-scenario"   # path to the directory
+preread     = false   # set true to pre-summarise the module into the system prompt (slower startup)
+reuse_index = true    # reuse existing ChromaDB index if present
+```
+
+**3. Delete the old index and restart**
+
+Switching modules requires rebuilding the vector index from scratch:
+
+```shell
+rm -rf .data/chroma/
+just serve
+```
+
+The index is rebuilt automatically on startup. With `reuse_index = true`, subsequent restarts load the cached index instantly.
+
+> **Note:** Only one module can be active at a time. The `rag_collection` key in `[vector_store]` names the ChromaDB collection; changing the module path without deleting `.data/chroma/` will serve stale embeddings.
+
 ### Optional: Tracing with Arize Phoenix
 
 To enable LLM call tracing (useful for debugging agent reasoning):
