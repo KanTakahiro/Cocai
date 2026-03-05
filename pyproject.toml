@@ -7,7 +7,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.20.0",
-    "chainlit>=2.0.0",
+    "chainlit>=2.9.6",
     "chromadb>=0.6.0",
     "cochar>=1.0.1",
     "llama-index-agent-openai>=0.3.0",

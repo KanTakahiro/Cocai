@@ -1,10 +1,15 @@
 """
-Auto-detect significant scene changes.
+Auto-detect significant scene changes and generate an illustration.
 
-Image generation has been removed; this module evaluates whether the scene
-has changed but does not produce illustrations.  It is kept so the
-BackgroundPaneUpdateManager scaffolding continues to work if scene updates
-are re-enabled in config.toml ([auto_update] scene = true).
+Pipeline per exchange:
+  1. Evaluate  — LLM decides if the scene/setting changed meaningfully.
+  2. Describe  — LLM writes a concise image-generation prompt.
+  3. Image     — OpenAI-compatible images/generations endpoint produces the art.
+  4. Publish   — SSE broadcasts the URL to the play UI centre pane.
+
+If image generation is disabled in config (`[image_generation] enabled = false`),
+the module only evaluates scene changes and signals "unchanged" — keeping the
+BackgroundPaneUpdateManager scaffolding functional with zero cost.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from llama_index.core.memory import Memory
 from llama_index.core.workflow import Context
 from llama_index.memory.mem0 import Mem0Memory
 
+from config import AppConfig
 from events import broadcaster
 
 from .async_panes_utils import build_transcript, format_transcript, llm_complete_text
@@ -24,6 +30,7 @@ from .async_panes_utils import build_transcript, format_transcript, llm_complete
 async def update_scene_if_needed(
     ctx: Context,
     memory: Memory | Mem0Memory,
+    app_config: AppConfig,
     last_user_msg: str | None = None,
     last_agent_msg: str | None = None,
 ) -> None:
@@ -40,8 +47,28 @@ async def update_scene_if_needed(
         if not should:
             broadcaster.publish({"type": "scene_status", "phase": "unchanged"})
             return
-        # Image generation is currently disabled; signal unchanged.
-        broadcaster.publish({"type": "scene_status", "phase": "unchanged"})
+
+        if not app_config.image_gen_enabled:
+            # Scene changed but image generation is disabled — nothing to display.
+            broadcaster.publish({"type": "scene_status", "phase": "unchanged"})
+            return
+
+        broadcaster.publish({"type": "scene_status", "phase": "describing"})
+        description = await __describe_visual_scene(transcript)
+        if not description:
+            broadcaster.publish({"type": "scene_status", "phase": "unchanged"})
+            return
+
+        broadcaster.publish({"type": "scene_status", "phase": "imaging"})
+        url = await __generate_scene_image(description, app_config)
+        if not url:
+            broadcaster.publish({"type": "scene_status", "phase": "error"})
+            return
+
+        broadcaster.publish({"type": "illustration", "url": url})
+        broadcaster.publish({"type": "scene_status", "phase": "updated"})
+        logger.info("Scene illustration updated.")
+
     except asyncio.CancelledError:
         logger.info("auto_scene_update task cancelled")
         try:
@@ -63,7 +90,9 @@ async def __should_update_scene(transcript: list[dict[str, str]]) -> bool:
     recent_text = format_transcript(transcript, last_k=8)
     prompt = (
         "You are monitoring a Call of Cthulhu session. Decide if the LATEST exchange significantly changes the scene/setting.\n"
-        "Scene changes include: moving to a different location (inside/outside), entering a new room/building, time of day shifts, lighting/weather changes, a new set piece revealed, or a major shift in focus (e.g., basement to street, office to library).\n"
+        "Scene changes include: moving to a different location (inside/outside), entering a new room/building, "
+        "time of day shifts, lighting/weather changes, a new set piece revealed, or a major shift in focus "
+        "(e.g., basement to street, office to library).\n"
         "Do NOT trigger for rules clarifications, minor dialogue, or small detail tweaks.\n\n"
         "Conversation (most recent last):\n"
         f"{recent_text}\n\n"
@@ -74,3 +103,52 @@ async def __should_update_scene(transcript: list[dict[str, str]]) -> bool:
         return decision.lower().startswith("y")
     except Exception:
         return False
+
+
+async def __describe_visual_scene(transcript: list[dict[str, str]]) -> str:
+    """Ask the LLM to write a concise image-generation prompt for the current scene."""
+    recent_text = format_transcript(transcript, last_k=10)
+    prompt = (
+        "You are writing an image-generation prompt for a Call of Cthulhu scene illustration.\n"
+        "Based on the conversation below, describe the CURRENT SCENE visually in 50-80 words.\n"
+        "Focus on: location, architecture/environment, lighting, time of day, atmosphere, and key objects.\n"
+        "Style directive to append: dark atmospheric illustration, 1920s Lovecraftian horror, detailed oil painting.\n"
+        "Do NOT include character dialogue, game mechanics, dice rolls, or story outcomes — only what can be SEEN.\n\n"
+        f"Recent conversation (most recent last):\n{recent_text}\n\n"
+        "Write ONLY the image prompt, no preamble."
+    )
+    try:
+        description = await llm_complete_text(prompt)
+        return description.strip()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return ""
+
+
+async def __generate_scene_image(description: str, app_config: AppConfig) -> str:
+    """Call the OpenAI-compatible images/generations endpoint and return the image URL."""
+    logger = logging.getLogger("auto_scene_update")
+    try:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(
+            api_key=app_config.image_api_key,
+            base_url=app_config.llm_api_base,
+        )
+        response = await client.images.generate(
+            model=app_config.image_model,
+            prompt=description,
+            n=1,
+        )
+        url = response.data[0].url if response.data else None
+        if not url:
+            logger.warning("Image generation returned no URL.")
+            return ""
+        logger.info("Scene image generated: %s", url)
+        return url
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.error("Image generation failed: %s", e)
+        return ""

@@ -33,7 +33,7 @@ Settings are split across two files:
 `config.toml` sections: `[llm]`, `[embedding]`, `[vector_store]`, `[memory]`, `[tracing]`, `[game_module]`, `[auto_update]`.  
 `AppConfig.from_config()` (`src/config.py`) reads both; loaded once per chat session inside `@cl.on_chat_start`.
 
-Key env vars (`.env`): `LLM_API_KEY`, `EMBED_API_KEY` (falls back to `LLM_API_KEY`), `CHAINLIT_AUTH_SECRET`, `MEM0_API_KEY` (optional cloud Mem0), `TAVILY_API_KEY` (optional search).
+Key env vars (`.env`): `LLM_API_KEY`, `EMBED_API_KEY` (falls back to `LLM_API_KEY`), `IMAGE_API_KEY` (falls back to `LLM_API_KEY`), `CHAINLIT_AUTH_SECRET`, `MEM0_API_KEY` (optional cloud Mem0), `TAVILY_API_KEY` (optional search).
 
 ## Architecture
 

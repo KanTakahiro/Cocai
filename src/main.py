@@ -14,6 +14,7 @@ from llama_index.memory.mem0 import Mem0Memory
 from agentic_tools import AgentContextAwareToolRetriever as ToolProvider
 from agentic_tools.misc import ToolForConsultingTheModule
 from async_panes.history import update_history_if_needed
+from async_panes.scene import update_scene_if_needed
 from async_panes.pane_update_manager import BackgroundPaneUpdateManager
 from config import AppConfig
 
@@ -353,4 +354,20 @@ async def handle_message_from_user(message: cl.Message):
             debounce=0.15,
         )
         logger.info("Scheduled background history update (gen=%s)", gen)
+
+    if config.enable_auto_scene_update:
+        manager.schedule(
+            "scene",
+            gen,
+            lambda: update_scene_if_needed(
+                ctx=agent_ctx,
+                memory=agent_memory,
+                app_config=config,
+                last_user_msg=message.content,
+                last_agent_msg=agent_text,
+            ),
+            timeout=120.0,
+            debounce=0.15,
+        )
+        logger.info("Scheduled background scene update (gen=%s)", gen)
 

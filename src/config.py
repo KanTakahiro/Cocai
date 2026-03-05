@@ -74,6 +74,11 @@ class AppConfig:
     should_preread_game_module: bool = False
     should_reuse_existing_index: bool = True
 
+    # Image generation (OpenAI-compatible images/generations endpoint)
+    image_gen_enabled: bool = False
+    image_model: str = "bytedance-seed/seedream-4.5"
+    image_api_key: str = ""
+
     # Auto-update panes
     enable_auto_history_update: bool = True
     enable_auto_scene_update: bool = False
@@ -99,6 +104,7 @@ class AppConfig:
         mem = cfg.get("memory", {})
         tr = cfg.get("tracing", {})
         gm = cfg.get("game_module", {})
+        ig = cfg.get("image_generation", {})
         au = cfg.get("auto_update", {})
 
         return cls(
@@ -119,6 +125,9 @@ class AppConfig:
             game_module_path=gm.get("path", "game_modules/Clean-Up-Aisle-Four"),
             should_preread_game_module=bool(gm.get("preread", False)),
             should_reuse_existing_index=bool(gm.get("reuse_index", True)),
+            image_gen_enabled=bool(ig.get("enabled", False)),
+            image_model=ig.get("model", "bytedance-seed/seedream-4.5"),
+            image_api_key=e.get("IMAGE_API_KEY", e.get("LLM_API_KEY", "")),
             enable_auto_history_update=bool(au.get("history", True)),
             enable_auto_scene_update=bool(au.get("scene", False)),
         )
