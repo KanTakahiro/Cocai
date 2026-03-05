@@ -44,7 +44,7 @@ This fork simplifies the deployment by removing all mandatory external services:
 | **Vector DB** | Qdrant (Docker) | ChromaDB — runs in-process, persists to local disk |
 | **File storage** | MinIO (Docker) | Local filesystem (`.chainlit/files/`) |
 | **Observability** | Arize Phoenix (Docker) — always on | Optional; disabled by default |
-| **Image generation** | Stable Diffusion Web UI (standalone) | Removed |
+| **Image generation** | Stable Diffusion Web UI (standalone) | OpenRouter (chat completions + `modalities: ["image"]`) — configure via `[image_generation]` in `config.toml` |
 | **Python** | 3.12 only (`<3.13` due to numba) | 3.12+ (numba 0.61+ supports 3.13–3.15) |
 | **Dev startup** | `just serve-all` (tmux + Docker + Ollama) | `just serve` (single command, no dependencies) |
 
@@ -63,8 +63,9 @@ flowchart TD
         c[LlamaIndex]
     end
     subgraph "External APIs (configured in config.toml)"
-        llm_api[LLM API\nopenai / groq / together / …]
-        embed_api[Embedding API\nopenai / together / …]
+        llm_api[LLM API\nopenai / groq / together / openrouter / …]
+        embed_api[Embedding API\nopenai / voyageai / …]
+        image_api[Image API\nopenrouter / openai / …]
     end
     subgraph "Optional"
         phoenix[Arize Phoenix\nobservability]
@@ -74,6 +75,7 @@ flowchart TD
     embed_api -. "embedding" .-> c
     embed_api -. "embedding" .-> mem0
     llm_api -. "memory LLM" .-> mem0
+    image_api -. "scene illustration" .-> l
     chroma --"vector store"--> c
     chroma --"vector store"--> mem0
     mem0 --"short-term memory"--> c
@@ -131,6 +133,14 @@ model    = "gpt-4o"
 api_base = "https://api.openai.com/v1"
 model    = "text-embedding-3-small"
 dims     = 1536          # must match the model; OpenAI small = 1536
+
+[image_generation]
+# OpenRouter routes image models through chat completions, not /images/generations.
+# Set enabled = false to disable scene illustration entirely.
+enabled  = true
+api_base = "https://openrouter.ai/api/v1"
+model    = "bytedance-seed/seedream-4.5"
+# Other options: "google/gemini-2.0-flash-exp:free", "recraft-ai/recraft-v3"
 ```
 
 **3. Create `.env` with your secrets**
@@ -145,6 +155,7 @@ cp .env.example .env
 # .env
 LLM_API_KEY=sk-...
 EMBED_API_KEY=sk-...          # often the same as LLM_API_KEY
+IMAGE_API_KEY=sk-...          # falls back to LLM_API_KEY if omitted
 CHAINLIT_AUTH_SECRET=...      # generate with: uv run chainlit create-secret
 ```
 
@@ -167,10 +178,10 @@ In addition to the default Chainlit chat UI, Cocai exposes a three-pane gameplay
 - Center: The usual Chainlit chat
 - Right sidebar: PC name, stats, and skill buttons (click to roll)
 
-Auto-updating history excerpt:
+Auto-updating panes (background tasks after each exchange):
 
-- After each agent response, Cocai optionally refreshes the History pane with a concise summary of the story so far. The decision is made by the LLM to avoid updating on pure rules/meta clarifications.
-- Disable with `[auto_update] history = false` in `config.toml`.
+- **History** — Cocai refreshes the History pane with a concise summary of the story so far. The LLM decides whether the latest exchange advanced the story, so pure rules Q&A or small talk never triggers an update. Disable with `[auto_update] history = false`.
+- **Scene illustration** — When the scene/setting changes significantly (new location, time-of-day shift, etc.), Cocai generates an illustration via the configured image provider and displays it in the centre pane. Disable with `[auto_update] scene = false`, or turn off image generation entirely with `[image_generation] enabled = false`.
 
 ### Using a Different Game Module
 
@@ -253,6 +264,8 @@ just serve                 # index will be rebuilt on startup
 ```
 
 **Embedding dimension mismatch** — ensure `[embedding] dims` in `config.toml` matches the actual output of your chosen embedding model. OpenAI `text-embedding-3-small` = 1536, `text-embedding-3-large` = 3072, `text-embedding-ada-002` = 1536.
+
+**Scene illustrations not appearing / image generation 404** — most LLM-only providers (including OpenRouter for regular LLM calls) do **not** expose a `/images/generations` endpoint. OpenRouter image-capable models must be called via the chat completions endpoint with `modalities: ["image"]` — which is what Cocai does automatically. If you use a different `[image_generation] api_base`, make sure it actually supports image generation. Set `[image_generation] enabled = false` to disable illustrations entirely.
 
 ## License
 
