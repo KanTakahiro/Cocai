@@ -68,12 +68,17 @@ class CreateCharacterRequest(BaseModel):
 
 
 @wraps(cochar.create_character)
-async def create_character(ctx: Context, *args, **kwargs) -> dict:
+async def create_character(ctx: Context, **kwargs) -> dict:
     logger = logging.getLogger("create_character")
     # Remove 'ctx' from kwargs if present
     kwargs.pop("ctx", None)
+    # Parse through the schema so Pydantic fills in defaults (e.g. year=1925).
+    # LlamaIndex only forwards fields the agent explicitly provided, so without
+    # this step any field with a default that the agent omits would be absent.
+    request = CreateCharacterRequest(**kwargs)
+    cochar_kwargs = {k: v for k, v in request.model_dump().items() if v is not None}
     try:
-        character: Character = cochar.create_character(*args, **kwargs)
+        character: Character = cochar.create_character(**cochar_kwargs)
     except Exception as e:
         logger.error(f"Character creation failed: {e}", exc_info=e)
         raise RuntimeError(f"Character creation failed: {e}") from e
