@@ -1,5 +1,6 @@
 .chainlit/data.db
 .chainlit/translations/
+.chainlit/files/
 .data/
 
 # Created by https://www.toptal.com/developers/gitignore/api/python,pycharm,intellij,macos,linux,windows,git,jupyternotebooks

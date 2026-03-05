@@ -3,16 +3,17 @@
 # API keys go in .env (see .env.example), which is git-ignored.
 
 [llm]
-# Any OpenAI-compatible endpoint: OpenAI, Together AI, Groq, local vLLM, etc.
-api_base = "https://api.openai.com/v1"
-model    = "gpt-4o"
+# Any OpenAI-compatible endpoint: OpenAI, Together AI, Groq, OpenRouter, local vLLM, etc.
+api_base = "https://openrouter.ai/api/v1"
+model    = "arcee-ai/trinity-large-preview:free"
 
 [embedding]
-api_base = "https://api.openai.com/v1"
-model    = "text-embedding-3-small"
+api_base = "https://openrouter.ai/api/v1"
+model    = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
 # Dimensions must match the chosen model.
+# nvidia/llama-nemotron-embed-vl-1b-v2 = 4096
 # text-embedding-3-small = 1536, text-embedding-3-large = 3072, text-embedding-ada-002 = 1536
-dims     = 1536
+dims     = 4096
 
 [vector_store]
 # Local ChromaDB persistence directory (created automatically on first run).
