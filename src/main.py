@@ -18,7 +18,7 @@ from async_panes.pane_update_manager import BackgroundPaneUpdateManager
 from config import AppConfig
 
 from state import GameState
-from utils import set_up_data_layer
+from utils import OpenAICompatibleEmbedding, set_up_data_layer
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,6 @@ def set_up_llama_index(app_config: AppConfig):
     """
     logger = logging.getLogger("set_up_llama_index")
 
-    from llama_index.embeddings.openai import OpenAIEmbedding
     from llama_index.llms.openai_like import OpenAILike
 
     logger.info(
@@ -96,7 +95,7 @@ def set_up_llama_index(app_config: AppConfig):
         app_config.embed_api_base,
         app_config.embed_dims,
     )
-    Settings.embed_model = OpenAIEmbedding(
+    Settings.embed_model = OpenAICompatibleEmbedding(
         model=app_config.embed_model,
         api_base=app_config.embed_api_base,
         api_key=app_config.embed_api_key,

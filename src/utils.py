@@ -1,9 +1,11 @@
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, Dict, List, Union
 
 import chainlit.data as cl_data
+from llama_index.core.bridge.pydantic import PrivateAttr
+from llama_index.core.embeddings import BaseEmbedding
 from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
 from chainlit.data.storage_clients.base import BaseStorageClient
 from chainlit.logger import logger
@@ -19,6 +21,58 @@ from sqlalchemy import create_engine, text
 
 TRUTHY_STRINGS = {"1", "true", "yes", "y", "on", "t"}
 FALSY_STRINGS = {"0", "false", "no", "n", "off", "f"}
+
+
+class OpenAICompatibleEmbedding(BaseEmbedding):
+    """
+    OpenAI-compatible embedding that accepts any model name without enum validation.
+
+    Use instead of OpenAIEmbedding when the model is not an official OpenAI model
+    (e.g. models served via OpenRouter, Together AI, or local vLLM).
+    """
+
+    _async_client: Any = PrivateAttr()
+    _sync_client: Any = PrivateAttr()
+
+    def __init__(self, model: str, api_base: str, api_key: str, embed_batch_size: int = 10, **kwargs):
+        super().__init__(model_name=model, embed_batch_size=embed_batch_size, **kwargs)
+        from openai import AsyncOpenAI, OpenAI
+        self._async_client = AsyncOpenAI(api_key=api_key, base_url=api_base)
+        self._sync_client = OpenAI(api_key=api_key, base_url=api_base)
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "OpenAICompatibleEmbedding"
+
+    def _get_query_embedding(self, query: str) -> List[float]:
+        return self._sync_client.embeddings.create(
+            model=self.model_name, input=[query]
+        ).data[0].embedding
+
+    def _get_text_embedding(self, text: str) -> List[float]:
+        return self._sync_client.embeddings.create(
+            model=self.model_name, input=[text]
+        ).data[0].embedding
+
+    def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        response = self._sync_client.embeddings.create(model=self.model_name, input=texts)
+        return [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
+
+    async def _aget_query_embedding(self, query: str) -> List[float]:
+        response = await self._async_client.embeddings.create(
+            model=self.model_name, input=[query]
+        )
+        return response.data[0].embedding
+
+    async def _aget_text_embedding(self, text: str) -> List[float]:
+        response = await self._async_client.embeddings.create(
+            model=self.model_name, input=[text]
+        )
+        return response.data[0].embedding
+
+    async def _aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        response = await self._async_client.embeddings.create(model=self.model_name, input=texts)
+        return [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
 
 
 class LocalStorageClient(BaseStorageClient):
