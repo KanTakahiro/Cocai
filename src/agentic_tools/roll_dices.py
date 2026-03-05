@@ -8,6 +8,8 @@ import chainlit as cl
 from llama_index.core.workflow import Context
 from pydantic import Field
 
+from config import AppConfig
+
 
 def roll_a_dice(
     n: int = Field(description="number of faces of the dice to roll", gt=0, le=100),
@@ -100,11 +102,15 @@ async def roll_a_skill(
         ones_digit = 10
 
     # Send a fake PDF with the dice-rolling scene.
+    # The URL must be absolute because Chainlit's data layer fetches element URLs
+    # server-side (via aiohttp), which requires a full scheme + host.
+    app_config: AppConfig | None = cl.user_session.get("app_config")
+    base_url = app_config.server_base_url if app_config else "http://127.0.0.1:8000"
     try:
         scene = cl.Pdf(
             name="fake-pdf",
             display="inline",
-            url=f"/roll_dice?d10={tenth_digit}&d10={ones_digit}",
+            url=f"{base_url}/roll_dice?d10={tenth_digit}&d10={ones_digit}",
             # Prevent the default factory from being triggered by giving it a value explicitly.
             thread_id=await ctx.store.get("user_message_thread_id", "unknown"),
         )

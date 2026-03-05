@@ -46,3 +46,9 @@ model   = "bytedance-seed/seedream-4.5"
 [auto_update]
 history = true   # Summarise story history after each exchange (background task)
 scene   = true   # Auto-illustrate scene when setting significantly changes
+
+[server]
+# Base URL of this server, used to build absolute URLs for Chainlit element assets
+# (e.g. the dice-roll animation).  Must include scheme and host; no trailing slash.
+# Change this if the server is behind a reverse proxy or running on a different port.
+base_url = "http://127.0.0.1:8000"

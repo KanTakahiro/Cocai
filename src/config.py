@@ -83,6 +83,9 @@ class AppConfig:
     enable_auto_history_update: bool = True
     enable_auto_scene_update: bool = False
 
+    # Server
+    server_base_url: str = "http://127.0.0.1:8000"
+
     @classmethod
     def from_config(
         cls,
@@ -106,6 +109,7 @@ class AppConfig:
         gm = cfg.get("game_module", {})
         ig = cfg.get("image_generation", {})
         au = cfg.get("auto_update", {})
+        sv = cfg.get("server", {})
 
         return cls(
             llm_api_base=llm.get("api_base", "https://api.openai.com/v1"),
@@ -130,6 +134,7 @@ class AppConfig:
             image_api_key=e.get("IMAGE_API_KEY", e.get("LLM_API_KEY", "")),
             enable_auto_history_update=bool(au.get("history", True)),
             enable_auto_scene_update=bool(au.get("scene", False)),
+            server_base_url=sv.get("base_url", "http://127.0.0.1:8000"),
         )
 
     @classmethod
