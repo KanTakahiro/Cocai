@@ -122,6 +122,52 @@ def test_from_config_mem0_cloud_key(tmp_path):
     assert cfg.mem0_api_key == "m0-cloud"
 
 
+def test_config_defaults_image_and_server():
+    cfg = AppConfig()
+    assert cfg.image_gen_enabled is False
+    assert cfg.image_api_base == ""
+    assert cfg.image_model == "bytedance-seed/seedream-4.5"
+    assert cfg.server_base_url == "http://127.0.0.1:8000"
+
+
+def test_from_config_image_generation_section(tmp_path):
+    toml = tmp_path / "config.toml"
+    toml.write_text(
+        """
+[image_generation]
+enabled = true
+api_base = "https://openrouter.ai/api/v1"
+model = "openai/gpt-image-1"
+"""
+    )
+    env = {"LLM_API_KEY": "sk-llm", "IMAGE_API_KEY": "sk-img"}
+    cfg = AppConfig.from_config(toml_path=toml, env=env)
+    assert cfg.image_gen_enabled is True
+    assert cfg.image_api_base == "https://openrouter.ai/api/v1"
+    assert cfg.image_model == "openai/gpt-image-1"
+    assert cfg.image_api_key == "sk-img"
+
+
+def test_from_config_image_key_falls_back_to_llm_key(tmp_path):
+    toml = tmp_path / "config.toml"
+    toml.write_text("")
+    env = {"LLM_API_KEY": "sk-shared"}
+    cfg = AppConfig.from_config(toml_path=toml, env=env)
+    assert cfg.image_api_key == "sk-shared"
+
+
+def test_from_config_server_base_url(tmp_path):
+    toml = tmp_path / "config.toml"
+    toml.write_text(
+        """
+[server]
+base_url = "https://example.com"
+"""
+    )
+    cfg = AppConfig.from_config(toml_path=toml, env={})
+    assert cfg.server_base_url == "https://example.com"
+
+
 # ---------------------------------------------------------------------------
 # env_flag helper
 # ---------------------------------------------------------------------------
