@@ -35,7 +35,7 @@ return (
 
 VoyageAI 的 OpenAI 相容端點（`https://api.voyageai.com/v1`）**不支援** `dimensions` 參數，收到此參數時直接回傳 400 Bad Request。
 
-此問題不僅限於 VoyageAI，任何不支援 OpenAI `dimensions` 擴充的第三方 OpenAI 相容端點（例如部分 vLLM 部署、Together AI embedding models 等）都會受到影響。
+此問題不僅限於 VoyageAI，任何不支援 OpenAI `dimensions` 擴充的第三方 OpenAI 相容端點（例如部分 vLLM 部署、Together AI embedding models 等）都會受到影響。此問題已由多人回報至 upstream：[issue #4153](https://github.com/mem0ai/mem0/issues/4153)、[issue #3133](https://github.com/mem0ai/mem0/issues/3133)，目前仍 open 待修復。
 
 ## 我們期望的行為
 
@@ -45,22 +45,18 @@ VoyageAI 的 OpenAI 相容端點（`https://api.voyageai.com/v1`）**不支援**
 
 ## 修改內容
 
-**修改檔案：** `.venv/lib/python3.12/site-packages/mem0/embeddings/openai.py`
+**修改檔案：** `mem0/embeddings/openai.py`（原始碼）或 `.venv/lib/python3.12/site-packages/mem0/embeddings/openai.py`（已安裝套件）
 
-**修改後的 `embed()` 方法（第 44–60 行）：**
+**修改後的 `embed()` 方法（第 44–52 行）：**
 
 ```python
 text = text.replace("\n", " ")
-# Only pass `dimensions` for the official OpenAI endpoint.
-# Third-party OpenAI-compatible endpoints (e.g. VoyageAI) do not support
-# this parameter and return 400 Bad Request when it is present.
-is_official_openai = (
-    self.config.openai_base_url is None
-    and not os.getenv("OPENAI_API_BASE")
-    and not os.getenv("OPENAI_BASE_URL")
-)
+# Only pass `dimensions` when explicitly configured.
+# Third-party OpenAI-compatible endpoints (e.g. VoyageAI, vLLM with
+# non-matryoshka models) do not support this parameter and return
+# 400 Bad Request when it is present.
 kwargs = {"input": [text], "model": self.config.model}
-if is_official_openai:
+if self.config.embedding_dims is not None:
     kwargs["dimensions"] = self.config.embedding_dims
 return (
     self.client.embeddings.create(**kwargs)
@@ -69,11 +65,13 @@ return (
 )
 ```
 
-判斷邏輯：若 `openai_base_url` 設定為自訂 URL（包括環境變數 `OPENAI_API_BASE` / `OPENAI_BASE_URL`），則判定為第三方端點，不帶 `dimensions` 參數。
+判斷邏輯：只有在使用者明確設定 `embedding_dims` 時才帶上 `dimensions` 參數。相比先前基於 base URL 的判斷方式，此方案更簡潔，且對使用者更友好——使用者只需不設定 `embedding_dims` 即可使用任何不支援此參數的第三方端點。
 
-同時，也從 `src/main.py` 的 Mem0 config 字典中移除了 `"embedding_dims"` 欄位（原第 238 行），原因是：
-1. 帶不帶這個值對修補後的程式行為不再有影響
-2. 減少誤導性設定，VoyageAI 的 `voyage-4-lite` 預設輸出維度本就是 1024
+> **注意：** 此修改方案與 upstream issue [#4153](https://github.com/mem0ai/mem0/issues/4153) 的建議一致。
+
+同時，也需確認 `src/main.py` 的 Mem0 config 字典中未設定 `"embedding_dims"` 欄位，原因是：
+1. 未設定時，`embedding_dims` 為 `None`，patch 才能正確跳過 `dimensions` 參數
+2. VoyageAI 的 `voyage-4-lite` 預設輸出維度本就是 1024，無需手動指定
 
 ## 修改後的行為
 
@@ -105,9 +103,8 @@ return (
 重新執行本文件中「修改內容」一節中對 `embed()` 方法的替換，或參考此 patch 的 git 歷史記錄。
 
 ### 長期解決方案建議
-1. **向 Mem0 上游回報此問題**，建議他們在使用自訂 base_url 時跳過 `dimensions` 參數，或提供設定項目讓使用者明確控制
-2. **等待 Mem0 新版本**，確認 bug 是否已在新版中修復後，移除此 patch
-3. 若 Mem0 釋出原生 VoyageAI embedder provider，可直接切換使用
+1. **追蹤 upstream issue #4153**，等待 Mem0 官方合併修復後升級至新版，並移除此 patch
+2. 若 Mem0 釋出原生 VoyageAI embedder provider，可直接切換使用
 
 ### 相關設定
 - `config.toml` `[embedding]` 段：`model = "voyage-4-lite"`、`api_base = "https://api.voyageai.com/v1"`
