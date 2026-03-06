@@ -24,6 +24,9 @@ function getRandomArbitrary (min, max) {
 }
 
 const scene = new THREE.Scene()
+// Set a visible background immediately so the canvas is never black while
+// assets load.  The RGBELoader below will replace this once the HDR is ready.
+scene.background = new THREE.Color(0x1a0a2e)
 
 // Initialize the renderer.
 const renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -54,6 +57,12 @@ world.addBody(floorBody)
 
 DiceManager.setWorld(world)
 
+// Directional light for shadow casting on the ground.
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.5)
+dirLight.position.set(200, 400, 300)
+dirLight.castShadow = true
+scene.add(dirLight)
+
 const textureLoader = new THREE.TextureLoader()
 function applyCommonSettingsToTextureMap (map) {
   map.wrapS = THREE.RepeatWrapping
@@ -62,17 +71,36 @@ function applyCommonSettingsToTextureMap (map) {
   map.repeat.set(1, 1)
   map.colorSpace = THREE.SRGBColorSpace
 }
+// Try to build a local procedural environment for glass-dice reflections.
+// Using a dynamic import so a CDN failure here doesn't crash the whole module.
+import('three/examples/jsm/environments/RoomEnvironment.js')
+  .then(({ RoomEnvironment }) => {
+    const pmremGenerator = new THREE.PMREMGenerator(renderer)
+    const envTexture = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture
+    scene.environment = envTexture
+    pmremGenerator.dispose()
+  })
+  .catch(() => {
+    // RoomEnvironment unavailable: fall back to a simple ambient light so the
+    // dice are at least partially lit against the background colour.
+    scene.add(new THREE.AmbientLight(0xffffff, 1.5))
+  })
+
+// Load HDR for environment reflections only — do NOT replace the background so
+// the dark purple backdrop stays visible and the transparent dice are legible.
 new RGBELoader().load(
   'https://cdn.glitch.global/76fe1fa3-d3aa-4d7b-911f-8ad91e01d136/studio_small_08_2k.hdr?v=1646042358774',
   (texture) => {
     texture.mapping = THREE.EquirectangularReflectionMapping
-    scene.background = texture
     scene.environment = texture
   }
 )
 /* https://tympanus.net/codrops/2021/10/27/creating-the-effect-of-transparent-glass-and-plastic-in-three-js/ */
 const materialOptions = {
-  transmission: 1,
+  // Reduce transmission so the dice body is visible against any background.
+  // Full transmission (1.0) makes them invisible on light or dark backdrops.
+  transmission: 0.55,
+  color: new THREE.Color(0xaaddff), // pale blue tint — readable on dark bg
   thickness: 75,
   roughness: 0.25,
   ior: 1.5,
@@ -197,7 +225,12 @@ function createGround () {
     800
   )
   // Create a material for the ground.
-  const groundMaterial = new THREE.MeshPhysicalMaterial()
+  // Use a dark base colour and low env-map intensity so the floor doesn't
+  // blow out to white under the bright studio HDR.
+  const groundMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0x442211,
+    envMapIntensity: 0.3
+  })
   /* I really like the wooden texture from the three.js examples, so I'm going to use it here.
        https://github.com/mrdoob/three.js/blob/master/examples/webgl_lights_physical.html */
   const baseUrl = 'https://threejs.org/examples/textures/hardwood2_'

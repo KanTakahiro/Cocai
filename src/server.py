@@ -140,9 +140,11 @@ async def roll_dice(
             ]
         )
     ]
-    # Render the template with the dice data passed as context
+    # Render the template with the dice data passed as context.
+    # `version` is a cache-busting token so the browser always fetches the latest dice.js.
+    import time
     template = Template(dice_template)
-    return template.render(dice_options=dice_data)
+    return template.render(dice_options=dice_data, version=int(time.time()))
 
 
 @app.get("/play", response_class=HTMLResponse)
